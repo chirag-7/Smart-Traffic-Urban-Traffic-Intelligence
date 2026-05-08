@@ -1,0 +1,36 @@
+# Environment
+.env
+venv/
+
+# Data (too large for Git)
+data/
+delta_tables/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Models (large binary files)
+models/*.pt
+models/gbt_traffic_model/
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# OS
+.DS_Store
+Thumbs.db
+.env.local

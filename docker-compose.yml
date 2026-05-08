@@ -1,0 +1,74 @@
+version: '3.8'
+
+services:
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.0
+    container_name: zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    ports:
+      - "2181:2181"
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "2181"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    container_name: kafka
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+    ports:
+      - "9092:9092"     # Host access (your Python producers)
+      - "29092:29092"   # Internal Docker access (Spark containers)
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      # Two listeners: PLAINTEXT for host, PLAINTEXT_INTERNAL for containers
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_INTERNAL:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092,PLAINTEXT_INTERNAL://kafka:29092
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,PLAINTEXT_INTERNAL://0.0.0.0:29092
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT_INTERNAL
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+    healthcheck:
+      test: ["CMD", "kafka-topics", "--bootstrap-server", "localhost:9092", "--list"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+
+  spark-master:
+    image: bitnamilegacy/spark:3.5.0
+    container_name: spark-master
+    environment:
+      - SPARK_MODE=master
+      - SPARK_RPC_AUTHENTICATION_ENABLED=no
+      - SPARK_RPC_ENCRYPTION_ENABLED=no
+    ports:
+      - "8090:8080"
+      - "7077:7077"
+    volumes:
+      - ./spark_jobs:/opt/spark_jobs
+      - ./delta_tables:/opt/delta_tables
+      - ./models:/opt/models
+      - ./data:/opt/data
+
+  spark-worker:
+    image: bitnamilegacy/spark:3.5.0
+    container_name: spark-worker
+    depends_on:
+      - spark-master
+    environment:
+      - SPARK_MODE=worker
+      - SPARK_MASTER_URL=spark://spark-master:7077
+      - SPARK_WORKER_MEMORY=4G
+      - SPARK_WORKER_CORES=2
+    volumes:
+      - ./spark_jobs:/opt/spark_jobs
+      - ./delta_tables:/opt/delta_tables
+      - ./models:/opt/models
+      - ./data:/opt/data

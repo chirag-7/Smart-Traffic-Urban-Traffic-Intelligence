@@ -26,6 +26,9 @@ ENV/
 models/*.pt
 models/gbt_traffic_model/
 
+# Dependencies (JAR files, downloaded via scripts)
+spark_jobs/jars/
+
 # Jupyter
 .ipynb_checkpoints/
 *.ipynb

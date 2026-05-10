@@ -4,23 +4,6 @@
 
 ---
 
-## Quick start
-
-```powershell
-git clone https://github.com/zubiiabbasi/smart-traffic.git
-cd smart-traffic
-py -3.10 -m venv venv
-.\venv\Scripts\Activate.ps1
-pip install -r requirements.txt
-copy .env.example .env
-# Edit .env — add OPENWEATHER_API_KEY if using weather producer; never commit .env
-docker compose up -d
-```
-
-Then follow **§8 Experimental protocol** (graph + ML batch jobs, streaming, producers, dashboard).
-
----
-
 ## Abstract
 
 Urban traffic management increasingly relies on **heterogeneous data streams**—loop detectors, floating-car probes, video, and environmental sensors—processed under latency and consistency constraints. This repository implements an **end-to-end experimental pipeline** that (i) ingests multiple modalities through **Apache Kafka**, (ii) processes them with **Apache Spark Structured Streaming** and **Delta Lake** for fault-tolerant append-only storage, (iii) applies **NetworkX**–based **PageRank** and **multi-source shortest paths** on a road-sensor graph derived from **METR-LA**, (iv) trains a **gradient-boosted tree (GBT)** regressor for short-term speed estimation, (v) fine-tunes **YOLOv8** for vehicle detection on **UA-DETRAC** imagery, and (vi) exposes aggregated signals through a **Streamlit** dashboard. The design emphasizes **reproducibility** (pinned dependencies, explicit topic schemas, checkpoint locations) and **separation of batch graph precomputation** from **online congestion-triggered rerouting hints**. The codebase targets **Windows** workstations with **Docker Desktop** and **Python 3.10**, reflecting common institutional lab environments.

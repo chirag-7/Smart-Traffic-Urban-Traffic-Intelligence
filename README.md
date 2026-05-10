@@ -2,6 +2,25 @@
 
 **Keywords:** intelligent transportation systems (ITS), stream processing, Apache Kafka, Apache Spark, Delta Lake, graph analytics, congestion detection, gradient boosting, YOLOv8, reproducible pipelines.
 
+**Maintainer:** [Zubair Abbas](https://github.com/zubiiabbasi) · Repository: [github.com/zubiiabbasi/smart-traffic](https://github.com/zubiiabbasi/smart-traffic)
+
+---
+
+## Quick start
+
+```powershell
+git clone https://github.com/zubiiabbasi/smart-traffic.git
+cd smart-traffic
+py -3.10 -m venv venv
+.\venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+copy .env.example .env
+# Edit .env — add OPENWEATHER_API_KEY if using weather producer; never commit .env
+docker compose up -d
+```
+
+Then follow **§8 Experimental protocol** (graph + ML batch jobs, streaming, producers, dashboard).
+
 ---
 
 ## Abstract
@@ -155,17 +174,13 @@ From `requirements.txt` (non-exhaustive): **PySpark 3.4.0**, **delta-spark 2.4.0
 
 ### 7.3 Configuration
 
-Copy secrets and tuning into `.env` (never commit):
+Use the tracked template **`.env.example`**: copy it to **`.env`** and fill in secrets locally. **`.env` is gitignored** — do not commit it or paste keys into issues or pull requests.
 
-```env
-OPENWEATHER_API_KEY=...
-OPENWEATHER_CITY=Los Angeles
-KAFKA_BOOTSTRAP_SERVERS=localhost:9092
-DATA_DIR=./data
-DELTA_DIR=./delta_tables
-MODELS_DIR=./models
-SPARK_DRIVER_MEMORY=4g
+```powershell
+copy .env.example .env
 ```
+
+Variables include `OPENWEATHER_API_KEY`, `KAFKA_BOOTSTRAP_SERVERS`, optional `WEATHER_TOPIC` / `WEATHER_POLL_SECONDS`, and Spark paths (`DATA_DIR`, `DELTA_DIR`, `MODELS_DIR`, `SPARK_DRIVER_MEMORY`). See `.env.example` for the full list.
 
 ---
 
@@ -227,6 +242,8 @@ smart-traffic/
 ├── models/              # Artifacts (gitignored where large)
 ├── docker-compose.yml
 ├── requirements.txt
+├── .env.example          # Template only — copy to .env (not committed)
+├── LICENSE
 └── README.md
 ```
 
@@ -248,7 +265,7 @@ smart-traffic/
 1. METR-LA traffic speed dataset (widely used benchmark; obtain via original distributor / Zenodo mirror per your institution’s policy).
 2. NYC Taxi & Limousine Commission. *TLC Trip Record Data* — [https://www.nyc.gov/site/tlc/about/tlc-trip-record-data.page](https://www.nyc.gov/site/tlc/about/tlc-trip-record-data.page)
 3. UA-DETRAC Multi-Camera Tracking and Detection — [https://detrac-db.rit.albany.edu/](https://detrac-db.rit.albany.edu/)
-4. Zaharia, M. et al. Apache Spark; Structured Streaming documentation — [https://spark.apache.org/](https://spark.apache.org/)
+4. Apache Spark / Structured Streaming (Apache Software Foundation) — [https://spark.apache.org/](https://spark.apache.org/)
 5. Kreps, J., Narkhede, N., Rao, J. Apache Kafka — [https://kafka.apache.org/](https://kafka.apache.org/)
 6. Armbrust, M. et al. Delta Lake — [https://delta.io/](https://delta.io/)
 7. Jocher, G. et al. Ultralytics YOLOv8 — [https://github.com/ultralytics/ultralytics](https://github.com/ultralytics/ultralytics)
@@ -262,15 +279,25 @@ If you use this codebase as a software artifact in a paper, adapt as needed:
 ```bibtex
 @software{smart_traffic_2026,
   title        = {Smart Traffic: Multimodal Streaming Analytics for Urban Traffic Intelligence},
-  author       = {{Project contributors}},
+  author       = {Abbas, Zubair},
   year         = {2026},
-  url          = {https://github.com/YOUR_ORG/smart-traffic},
+  url          = {https://github.com/zubiiabbasi/smart-traffic},
   note         = {Kafka, Spark Structured Streaming, Delta Lake, YOLOv8, NetworkX pipeline}
 }
 ```
 
 ---
 
+## Security
+
+If you find a security issue in **this repository’s code**, open a private vulnerability report via GitHub (**Security → Report a vulnerability**) if enabled, or contact the maintainer without posting secrets. **Never** share API keys, `.env` contents, or raw mobility/video data in public issues.
+
+---
+
 ## License and attribution
 
-This repository is provided for **research and education**. Third-party datasets (**METR-LA**, **NYC TLC**, **UA-DETRAC**) and APIs (**OpenWeatherMap**) retain their **original licenses**; cite them in any derivative work.
+**Source code** in this repository is released under the **[MIT License](LICENSE)** (Copyright © 2026 Zubair Abbas). You may use a different license for your own fork if you replace `LICENSE` accordingly.
+
+**Datasets and external services** (**METR-LA**, **NYC TLC**, **UA-DETRAC**, **OpenWeatherMap**, etc.) remain under their **respective terms**; this project does not redistribute them. Obtain data and keys yourself and cite primary sources in publications.
+
+If you need **copyleft** or **no-commercial-use** terms for the code instead of MIT, replace `LICENSE` before publishing and update this section.

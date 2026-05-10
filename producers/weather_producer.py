@@ -1,4 +1,14 @@
+"""
+Poll OpenWeatherMap current weather and publish JSON to Kafka (default ``topic_weather``).
+
+Environment (``.env``): ``OPENWEATHER_API_KEY``, ``OPENWEATHER_CITY``, optional ``WEATHER_TOPIC``,
+``WEATHER_POLL_SECONDS``.
+"""
+
+from __future__ import annotations
+
 import json
+import logging
 import os
 import time
 from datetime import datetime, timezone
@@ -7,8 +17,10 @@ import requests
 from dotenv import load_dotenv
 from kafka import KafkaProducer
 
-
 load_dotenv()
+
+logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+logger = logging.getLogger(__name__)
 
 KAFKA_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
 OPENWEATHER_API_KEY = os.getenv("OPENWEATHER_API_KEY", "").strip()
@@ -18,20 +30,14 @@ WEATHER_POLL_SECONDS = int(os.getenv("WEATHER_POLL_SECONDS", "300"))
 
 
 def fetch_weather(city: str, api_key: str) -> dict:
-    """Fetch current weather from OpenWeatherMap."""
     url = "https://api.openweathermap.org/data/2.5/weather"
-    params = {
-        "q": city,
-        "appid": api_key,
-        "units": "metric",
-    }
+    params = {"q": city, "appid": api_key, "units": "metric"}
     response = requests.get(url, params=params, timeout=20)
     response.raise_for_status()
     return response.json()
 
 
 def build_message(payload: dict) -> dict:
-    """Normalize OpenWeather response into a compact Kafka message."""
     weather = payload.get("weather", [{}])[0]
     main = payload.get("main", {})
     wind = payload.get("wind", {})
@@ -57,15 +63,17 @@ def build_message(payload: dict) -> dict:
     }
 
 
-def main():
-    print("[Weather Producer] Starting...")
-    print(f"[Weather Producer] Kafka servers: {KAFKA_SERVERS}")
-    print(f"[Weather Producer] Topic: {WEATHER_TOPIC}")
-    print(f"[Weather Producer] City: {OPENWEATHER_CITY}")
-    print(f"[Weather Producer] Poll interval: {WEATHER_POLL_SECONDS} seconds")
+def main() -> None:
+    logger.info(
+        "Kafka %s | topic=%s | city=%s | poll=%ss",
+        KAFKA_SERVERS,
+        WEATHER_TOPIC,
+        OPENWEATHER_CITY,
+        WEATHER_POLL_SECONDS,
+    )
 
     if not OPENWEATHER_API_KEY:
-        print("[Weather Producer] ✗ OPENWEATHER_API_KEY is missing in .env")
+        logger.error("Set OPENWEATHER_API_KEY in .env")
         return
 
     producer = KafkaProducer(
@@ -76,7 +84,6 @@ def main():
     )
 
     message_count = 0
-
     try:
         while True:
             try:
@@ -85,24 +92,23 @@ def main():
                 producer.send(WEATHER_TOPIC, value=message)
                 producer.flush()
                 message_count += 1
-
-                print(
-                    f"[Weather Producer] Sent {message_count} — "
-                    f"{message['city']} | {message['temp_c']}°C | "
-                    f"{message['weather_main']} | humidity {message['humidity']}%"
+                logger.info(
+                    "%s | %.1f°C | %s",
+                    message["city"],
+                    message["temp_c"] or 0.0,
+                    message["weather_main"],
                 )
             except requests.RequestException as exc:
-                print(f"[Weather Producer] Weather API error: {exc}")
+                logger.warning("HTTP error: %s", exc)
             except Exception as exc:
-                print(f"[Weather Producer] Unexpected error: {exc}")
+                logger.warning("Unexpected: %s", exc)
 
             time.sleep(WEATHER_POLL_SECONDS)
-
     except KeyboardInterrupt:
-        print("\n[Weather Producer] Stopping...")
+        logger.info("Stopped.")
     finally:
         producer.flush()
-        print(f"[Weather Producer] Done. Total messages: {message_count}")
+        logger.info("Total messages sent: %s", message_count)
 
 
 if __name__ == "__main__":

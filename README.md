@@ -2,7 +2,7 @@
 
 End-to-end demo pipeline that combines **Apache Kafka**, **Apache Spark Structured Streaming**, **Delta Lake**, **Ultralytics YOLOv8**, and **NetworkX** graph analytics to simulate how a city might ingest multimodal traffic data, detect congestion, surface rerouting hints from a road-sensor graph, and visualize everything in **Streamlit**.
 
-This repository targets **Windows** with **Docker Desktop** (Kafka/Zookeeper; optional Spark containers) and **Python 3.10** — see `requirements.txt` and `plan/smart_city_traffic_implementation_guide_v2.md` for environment specifics.
+This repository targets **Windows** with **Docker Desktop** (Kafka/Zookeeper; optional Spark containers) and **Python 3.10** — see `requirements.txt` for pinned dependencies.
 
 ---
 
@@ -29,7 +29,6 @@ smart-traffic/
 ├── data/                # Local datasets (gitignored)
 ├── delta_tables/        # Runtime Delta output (gitignored)
 ├── models/              # YOLO weights & MLlib pipeline (mostly gitignored)
-├── plan/                # Detailed implementation guide (PDF-style markdown)
 ├── docker-compose.yml   # Zookeeper, Kafka, Spark images
 ├── requirements.txt
 └── README.md
@@ -132,8 +131,6 @@ Spark UI (if using compose Spark image with published port): host port **8090** 
 | Empty rerouting alerts | Run `graph_analytics.py` first; ensure producers send **`sensor_index`**. |
 | Delta read errors in Streamlit | Same Delta JAR version as streaming (`delta-core_2.12:2.4.0` via `spark.jars.packages`). |
 | PySpark / Java failures | Java 11 on `PATH` and `JAVA_HOME`. |
-
-Full narrative: **`plan/smart_city_traffic_implementation_guide_v2.md`**.
 
 ---
 

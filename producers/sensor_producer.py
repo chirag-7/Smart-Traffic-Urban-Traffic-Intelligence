@@ -1,7 +1,6 @@
 import json
 import time
 import os
-import pandas as pd
 import numpy as np
 import h5py
 from kafka import KafkaProducer
@@ -35,10 +34,12 @@ with h5py.File('data/metr-la/METR-LA.h5', 'r') as f:
             speed_value = values[t_idx, s_idx]
             if np.isnan(speed_value):
                 continue
+            # sensor_index matches METR-LA adjacency row/column order (graph vertex id as string "0".."n-1")
             message = {
                 "timestamp": str(timestamp),
                 "sensor_id": sensor_id.decode('utf-8') if isinstance(sensor_id, bytes) else str(sensor_id),
-                "speed": float(speed_value)
+                "sensor_index": int(s_idx),
+                "speed": float(speed_value),
             }
             producer.send('topic_sensors', value=message)
             row_count += 1

@@ -68,6 +68,7 @@ cv_df = read_delta(spark, "cv_vehicle_counts")
 sensor_df = read_delta(spark, "sensor_speeds")
 pred_df = read_delta(spark, "speed_predictions")
 alert_df = read_delta(spark, "rerouting_alerts")
+weather_df = read_delta(spark, "weather", limit=200)
 
 with col1:
     total_vehicles = int(cv_df["vehicle_count"].sum()) if cv_df is not None else 0
@@ -82,6 +83,22 @@ with col3:
     st.metric("🔴 Congested Readings", congested, delta="threshold: <20 mph")
 
 with col4:
+    # Weather KPI (latest observation)
+    if weather_df is not None and len(weather_df) > 0:
+        # pick latest by timestamp if present
+        try:
+            weather_df["timestamp"] = pd.to_numeric(weather_df["timestamp"], errors="coerce")
+            latest = weather_df.sort_values("timestamp", ascending=False).iloc[0]
+            temp_c = latest.get("temp_c")
+            humidity = latest.get("humidity")
+            cond = latest.get("weather_main") or latest.get("weather_description")
+            st.metric("🌤️ Latest Temp (°C)", f"{temp_c:.1f}" if temp_c is not None else "n/a")
+            st.caption(f"{latest.get('city','')} — {cond} — humidity {humidity}%")
+        except Exception:
+            st.info("Weather stream is available, but latest observation could not be parsed.")
+    else:
+        st.info("Waiting for weather data from Kafka...")
+
     alerts = len(alert_df) if alert_df is not None else 0
     st.metric("🔀 Rerouting Alerts", alerts)
 

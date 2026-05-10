@@ -146,6 +146,7 @@ cctv_query = (
 sensor_schema = StructType([
     StructField("timestamp", StringType()),
     StructField("sensor_id", StringType()),
+    StructField("sensor_index", IntegerType(), True),
     StructField("speed", FloatType()),
 ])
 
@@ -166,21 +167,37 @@ def detect_congestion_and_reroute(batch_df, batch_id):
     # Detect congested sensors
     congested = batch_df.filter(col("speed") < lit(CONGESTION_THRESHOLD_MPH))
     if congested.count() > 0:
-        congested_list = [r["sensor_id"] for r in congested.collect()]
-        print(f"[Batch {batch_id}] CONGESTION ALERT — Sensors: {congested_list}")
+        congested_rows = congested.collect()
+        labels = [
+            f"{r['sensor_id']}[{r['sensor_index']}]"
+            if r["sensor_index"] is not None
+            else str(r["sensor_id"])
+            for r in congested_rows
+        ]
+        print(f"[Batch {batch_id}] CONGESTION ALERT — Sensors: {labels}")
 
-        # Load shortest paths and write rerouting suggestions
-        try:
-            sp_df = spark.read.format("delta").load("delta_tables/graph_shortest_paths")
-            reroutes = sp_df.filter(col("id").isin(congested_list))
+        vertex_ids = sorted(
+            {str(int(r["sensor_index"])) for r in congested_rows if r["sensor_index"] is not None}
+        )
 
-            if reroutes.count() > 0:
-                reroutes.withColumn("batch_id", lit(batch_id)).write.format("delta").mode(
-                    "append"
-                ).save("delta_tables/rerouting_alerts")
-                print(f"[Batch {batch_id}] Rerouting alerts written for {reroutes.count()} sensors")
-        except Exception as e:
-            print(f"[Batch {batch_id}] Shortest paths not available yet: {e}")
+        if not vertex_ids:
+            print(
+                f"[Batch {batch_id}] Rerouting skipped: sensor_index missing on messages "
+                "(run updated producers/sensor_producer.py)."
+            )
+        else:
+            # Load shortest paths and write rerouting suggestions (graph ids are "0".."n-1")
+            try:
+                sp_df = spark.read.format("delta").load("delta_tables/graph_shortest_paths")
+                reroutes = sp_df.filter(col("id").isin(vertex_ids))
+
+                if reroutes.count() > 0:
+                    reroutes.withColumn("batch_id", lit(batch_id)).write.format("delta").mode(
+                        "append"
+                    ).save("delta_tables/rerouting_alerts")
+                    print(f"[Batch {batch_id}] Rerouting alerts written for {reroutes.count()} sensors")
+            except Exception as e:
+                print(f"[Batch {batch_id}] Shortest paths not available yet: {e}")
 
 print("[Stream Processor] Reading sensor stream from Kafka...")
 sensor_stream = (
@@ -236,10 +253,55 @@ gps_query = (
 )
 
 # ============================================================================
-print("\n[Stream Processor] ✅ All 3 streams active:")
+# BRANCH D: WEATHER — ingest from topic_weather → write to Delta
+# ============================================================================
+
+weather_schema = StructType([
+    StructField("city", StringType()),
+    StructField("country", StringType()),
+    StructField("observed_at", StringType()),
+    StructField("temp_c", FloatType()),
+    StructField("feels_like_c", FloatType()),
+    StructField("temp_min_c", FloatType()),
+    StructField("temp_max_c", FloatType()),
+    StructField("humidity", IntegerType()),
+    StructField("pressure_hpa", IntegerType()),
+    StructField("wind_speed_mps", FloatType()),
+    StructField("wind_deg", IntegerType()),
+    StructField("clouds_pct", IntegerType()),
+    StructField("weather_main", StringType()),
+    StructField("weather_description", StringType()),
+    StructField("weather_id", IntegerType()),
+    StructField("timestamp", FloatType()),
+])
+
+print("[Stream Processor] Reading weather stream from Kafka...")
+weather_stream = (
+    spark.readStream
+    .format("kafka")
+    .option("kafka.bootstrap.servers", KAFKA_SPARK)
+    .option("subscribe", "topic_weather")
+    .option("startingOffsets", "latest")
+    .load()
+    .select(from_json(col("value").cast("string"), weather_schema).alias("d"))
+    .select("d.*")
+)
+
+weather_query = (
+    weather_stream.writeStream
+    .format("delta")
+    .option("checkpointLocation", "delta_tables/checkpoints/weather")
+    .outputMode("append")
+    .trigger(processingTime="30 seconds")
+    .start("delta_tables/weather")
+)
+
+# ============================================================================
+print("\n[Stream Processor] ✅ All 4 branches active:")
 print("  Branch A: CCTV → YOLOv8 inference → delta_tables/cv_vehicle_counts")
 print("  Branch B: Sensors → congestion detection → delta_tables/sensor_speeds + rerouting_alerts")
 print("  Branch C: GPS → delta_tables/gps_trips")
+print("  Branch D: Weather → delta_tables/weather")
 print("\nPress Ctrl+C to stop.\n")
 
 spark.streams.awaitAnyTermination()

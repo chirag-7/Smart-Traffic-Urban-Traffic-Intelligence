@@ -118,7 +118,8 @@ pip install `
   pillow==10.1.0 `
   pyyaml==6.0.1 `
   python-dotenv==1.0.0 `
-  requests==2.31.0
+  requests==2.31.0 `
+  networkx==3.3
 ```
 
 Save these as `requirements.txt` (see Section 3).
@@ -155,7 +156,8 @@ smart-traffic/
 ├── producers/
 │   ├── sensor_producer.py
 │   ├── gps_producer.py
-│   └── cctv_producer.py
+│   ├── cctv_producer.py
+│   └── weather_producer.py   # OpenWeatherMap → topic_weather
 │
 ├── spark_jobs/
 │   ├── stream_processor.py       # Main streaming pipeline
@@ -260,6 +262,7 @@ pillow==10.1.0
 pyyaml==6.0.1
 python-dotenv==1.0.0
 requests==2.31.0
+networkx==3.3
 ```
 
 Install from it anytime:
@@ -319,6 +322,7 @@ services:
       retries: 10
 
   spark-master:
+    # Repo uses bitnamilegacy/spark:3.5.0 — same layout as below
     image: bitnami/spark:3.5.0
     container_name: spark-master
     environment:
@@ -326,7 +330,7 @@ services:
       - SPARK_RPC_AUTHENTICATION_ENABLED=no
       - SPARK_RPC_ENCRYPTION_ENABLED=no
     ports:
-      - "8080:8080"
+      - "8090:8080"   # Spark UI on host http://localhost:8090 (avoids IIS/other binds on 8080)
       - "7077:7077"
     volumes:
       - ./spark_jobs:/opt/spark_jobs
@@ -381,7 +385,7 @@ spark-master   running (healthy)
 spark-worker   running
 ```
 
-Check Spark UI: http://localhost:8080 — you should see 1 worker registered.
+Check Spark UI: **http://localhost:8090** — you should see 1 worker registered (compose maps container port 8080 → host **8090**).
 
 ---
 
@@ -629,7 +633,9 @@ docker exec -it kafka kafka-topics --create --topic topic_gps --bootstrap-server
 
 docker exec -it kafka kafka-topics --create --topic topic_cctv --bootstrap-server localhost:9092 --partitions 3 --replication-factor 1
 
-# Verify all 3 topics exist
+docker exec -it kafka kafka-topics --create --topic topic_weather --bootstrap-server localhost:9092 --partitions 3 --replication-factor 1
+
+# Verify all 4 topics exist (auto-create may already exist; explicit create avoids surprises)
 docker exec -it kafka kafka-topics --list --bootstrap-server localhost:9092
 ```
 
@@ -662,12 +668,14 @@ df = pd.read_hdf('data/metr-la/metr-la.h5', key='df')
 print(f"[Sensor Producer] Loaded {df.shape} — streaming to Kafka...")
 
 for timestamp, row in df.iterrows():
-    for sensor_id, speed_value in row.items():
+    # sensor_index must match METR-LA adjacency matrix column order (graph vertex id "0".."n-1")
+    for sensor_index, (sensor_id, speed_value) in enumerate(row.items()):
         if pd.isna(speed_value):
             continue
         message = {
             "timestamp": str(timestamp),
             "sensor_id": str(sensor_id),
+            "sensor_index": int(sensor_index),
             "speed": float(speed_value)
         }
         producer.send('topic_sensors', value=message)
@@ -757,6 +765,15 @@ for frame_path in (f for cam in cameras for f in sorted(cam.parent.glob(f"{cam.n
 
 producer.flush()
 print("[CCTV Producer] Done.")
+```
+
+#### `producers/weather_producer.py`
+
+Polls OpenWeatherMap using `OPENWEATHER_API_KEY` and `OPENWEATHER_CITY` from `.env`, publishes JSON to **`topic_weather`** (configurable via `WEATHER_TOPIC`). Keep this running while `stream_processor.py` is active so **`delta_tables/weather`** stays fresh.
+
+```powershell
+.\venv\Scripts\Activate.ps1
+python producers/weather_producer.py
 ```
 
 ---
@@ -1104,6 +1121,7 @@ cctv_query = (
 sensor_schema = StructType([
     StructField("timestamp", StringType()),
     StructField("sensor_id", StringType()),
+    StructField("sensor_index", IntegerType(), True),  # aligns with graph vertex id "0".."n-1"
     StructField("speed",     FloatType())
 ])
 
@@ -1112,6 +1130,7 @@ def detect_congestion_and_reroute(batch_df, batch_id):
     Called for every micro-batch of sensor data.
     If any sensor reports speed below threshold, logs a rerouting alert
     and reads the pre-computed shortest paths from Delta Lake.
+    Rerouting joins on graph vertex id = str(sensor_index), not raw loop detector id.
     """
     if batch_df.count() == 0:
         return
@@ -1123,23 +1142,27 @@ def detect_congestion_and_reroute(batch_df, batch_id):
     congested = batch_df.filter(col("speed") < lit(CONGESTION_THRESHOLD_MPH))
 
     if congested.count() > 0:
-        congested_sensors = [r['sensor_id'] for r in congested.collect()]
-        print(f"[CONGESTION ALERT] Batch {batch_id} — Congested sensors: {congested_sensors}")
+        rows = congested.collect()
+        vertex_ids = sorted({str(int(r["sensor_index"])) for r in rows if r["sensor_index"] is not None})
+        labels = [
+            f"{r['sensor_id']}[{r['sensor_index']}]" if r["sensor_index"] is not None else str(r["sensor_id"])
+            for r in rows
+        ]
+        print(f"[CONGESTION ALERT] Batch {batch_id} — Congested sensors: {labels}")
 
-        # Load pre-computed shortest paths (from graph_analytics.py)
-        try:
-            sp_df = spark.read.format("delta").load("delta_tables/graph_shortest_paths")
-            # Find alternative routes FROM congested sensors
-            reroutes = sp_df.filter(col("id").isin(congested_sensors))
-
-            # Write rerouting suggestions to Delta
-            reroutes.withColumn("batch_id", lit(batch_id)) \
-                    .write.format("delta").mode("append") \
-                    .save("delta_tables/rerouting_alerts")
-
-            print(f"[REROUTING] Alternatives written for {reroutes.count()} sensors.")
-        except Exception as e:
-            print(f"[REROUTING] Shortest paths not yet available: {e}")
+        if not vertex_ids:
+            print(f"[Batch {batch_id}] Rerouting skipped: sensor_index missing (update sensor producer).")
+        else:
+            try:
+                sp_df = spark.read.format("delta").load("delta_tables/graph_shortest_paths")
+                reroutes = sp_df.filter(col("id").isin(vertex_ids))
+                if reroutes.count() > 0:
+                    reroutes.withColumn("batch_id", lit(batch_id)) \
+                            .write.format("delta").mode("append") \
+                            .save("delta_tables/rerouting_alerts")
+                    print(f"[REROUTING] Alternatives written for {reroutes.count()} sensors.")
+            except Exception as e:
+                print(f"[REROUTING] Shortest paths not yet available: {e}")
 
 sensor_stream = (
     spark.readStream
@@ -1193,10 +1216,16 @@ gps_query = (
 )
 
 # ===========================================================================
-print("[Stream Processor] All 3 streams active:")
+# BRANCH D: WEATHER (optional — matches repo stream_processor.py)
+# ===========================================================================
+# topic_weather → delta_tables/weather (see producers/weather_producer.py)
+
+# ===========================================================================
+print("[Stream Processor] All 4 branches active:")
 print("  Branch A: CCTV → YOLOv8 UDF → delta_tables/cv_vehicle_counts")
 print("  Branch B: Sensors → congestion detection → delta_tables/sensor_speeds + rerouting_alerts")
 print("  Branch C: GPS → delta_tables/gps_trips")
+print("  Branch D: Weather → delta_tables/weather")
 print("Press Ctrl+C to stop.\n")
 
 spark.streams.awaitAnyTermination()
@@ -1340,7 +1369,7 @@ Open: http://localhost:8501
 
 ## 8. Running the Full System
 
-Open **7 PowerShell windows**, run each command in its own window, in order:
+Open **9 PowerShell windows** (or run producers/dashboard in fewer terminals once you know the flow). Recommended order:
 
 ### Window 1 — Infrastructure (run once)
 ```powershell
@@ -1380,15 +1409,20 @@ python producers/sensor_producer.py
 python producers/gps_producer.py
 ```
 
-### Window 7 — CCTV Producer + Dashboard
+### Window 7 — CCTV Producer
 ```powershell
-# Run CCTV producer
 .\venv\Scripts\Activate.ps1
 python producers/cctv_producer.py
 ```
 
+### Window 8 — Weather Producer (keep running; requires `OPENWEATHER_API_KEY` in `.env`)
 ```powershell
-# Then in a new window — dashboard
+.\venv\Scripts\Activate.ps1
+python producers/weather_producer.py
+```
+
+### Window 9 — Dashboard
+```powershell
 .\venv\Scripts\Activate.ps1
 streamlit run dashboard/app.py
 ```
@@ -1397,7 +1431,7 @@ streamlit run dashboard/app.py
 
 | URL | What |
 |-----|------|
-| http://localhost:8080 | Spark Master — check worker is registered |
+| http://localhost:8090 | Spark Master UI — check worker is registered (compose maps **8090→8080** in container) |
 | http://localhost:8501 | Streamlit dashboard — live traffic data |
 
 ---
@@ -1443,11 +1477,11 @@ And in `.env`:
 SPARK_DRIVER_MEMORY=2g
 ```
 
-### Port 8080 already in use (IIS or another service)
+### Port 8080 / 8090 (Spark UI)
+The repo’s `docker-compose.yml` publishes Spark UI on **host port 8090** (`8090:8080`). Open **http://localhost:8090**. If you change the mapping, adjust the URL accordingly.
+
 ```powershell
-# Find what's using port 8080
-netstat -ano | findstr :8080
-# Change Spark UI to a different port in docker-compose.yml: "8090:8080"
+netstat -ano | findstr :8090
 ```
 
 ### Delta table "not found" in dashboard
@@ -1460,13 +1494,13 @@ Make sure the streaming pipeline (`stream_processor.py`) has been running for at
 ### Sprint 1 ✅
 - [ ] Java 11 installed, `JAVA_HOME` set, `java -version` works
 - [ ] Docker Desktop running — all 4 containers show `healthy`
-- [ ] Spark UI at http://localhost:8080 shows 1 worker
+- [ ] Spark UI at http://localhost:8090 shows 1 worker
 - [ ] `data/metr-la/metr-la.h5` and `adj_mat.npy` exist
 - [ ] `data/nyc-taxi/yellow_tripdata_2022-01.parquet` exists
 - [ ] UA-DETRAC extracted, `convert_detrac_to_yolo.py` ran, `dataset.yaml` created
 - [ ] OpenWeatherMap API key in `.env`
-- [ ] 3 Kafka topics confirmed with `--list`
-- [ ] All 3 producers stream without errors
+- [ ] 4 Kafka topics confirmed (`topic_sensors`, `topic_gps`, `topic_cctv`, `topic_weather`) with `--list`
+- [ ] Sensor, GPS, CCTV, and weather producers stream without errors (weather optional if no API key)
 
 ### Sprint 2 ✅
 - [ ] YOLOv8 training complete — `models/yolov8_traffic/weights/best.pt` exists
@@ -1474,10 +1508,10 @@ Make sure the streaming pipeline (`stream_processor.py`) has been running for at
 - [ ] `ml_predictor.py` ran — RMSE and R² printed, `delta_tables/speed_predictions` exists
 
 ### Sprint 3 ✅
-- [ ] `stream_processor.py` running with all 3 branches active
-- [ ] Data flowing into `delta_tables/cv_vehicle_counts`, `sensor_speeds`, `gps_trips`
+- [ ] `stream_processor.py` running with all 4 branches active (including weather → `delta_tables/weather`)
+- [ ] Data flowing into `delta_tables/cv_vehicle_counts`, `sensor_speeds`, `gps_trips`, `weather`
 - [ ] Congestion alert printed in console when speed < 20 mph
-- [ ] `delta_tables/rerouting_alerts` populated
+- [ ] `delta_tables/rerouting_alerts` populated when congested sensors include valid `sensor_index`
 
 ### Sprint 4 ✅
 - [ ] Streamlit dashboard shows all 4 KPI metrics

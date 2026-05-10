@@ -1,79 +1,97 @@
-"""
-Task 11: Train YOLOv8 Vehicle Detection Model
-==============================================
-Why: Train a YOLOv8 model on UA-DETRAC dataset to detect vehicles in CCTV footage.
-This model will be used in Task 14 for real-time vehicle counting and detection.
-
-Dataset: 138,252 images, 100% annotated with bounding boxes
-Model: YOLOv8n (nano) - fast inference, suitable for real-time processing
-"""
-
 from ultralytics import YOLO
 from pathlib import Path
-import os
+import shutil
 
 print("[YOLOv8] Starting vehicle detection model training...")
 
-# Paths
+# ==========================================
+# PATHS
+# ==========================================
 DATASET_YAML = "data/ua-detrac/yolo_format/dataset.yaml"
-OUTPUT_DIR = Path("models/yolo_traffic_model")
+
+OUTPUT_PROJECT = Path("models")
+OUTPUT_NAME = "yolo_traffic_model"
+OUTPUT_DIR = OUTPUT_PROJECT / OUTPUT_NAME
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+LAST_WEIGHTS = OUTPUT_DIR / "weights" / "last.pt"
 
 print(f"[YOLOv8] Dataset: {DATASET_YAML}")
 print(f"[YOLOv8] Output: {OUTPUT_DIR}")
 
-# Check dataset exists
+# ==========================================
+# CHECK DATASET EXISTS
+# ==========================================
 if not Path(DATASET_YAML).exists():
     print(f"[YOLOv8] ✗ ERROR: dataset.yaml not found at {DATASET_YAML}")
     exit(1)
 
-# Load YOLOv8 nano model (lightweight, suitable for real-time)
-# Why nano: Fast inference speed for real-time CCTV processing
-print("[YOLOv8] Loading YOLOv8n (nano) model...")
-model = YOLO('yolov8n.pt')
+# ==========================================
+# TRAINING LOGIC
+# ==========================================
+if LAST_WEIGHTS.exists():
+    print(f"\n[YOLOv8] Found existing weights at {LAST_WEIGHTS}")
+    print("[YOLOv8] Loading weights and continuing training...")
+    print("[YOLOv8] NOTE: Using manual resume (not resume=True) to avoid optimizer mismatch bug.")
 
-print("[YOLOv8] Starting training...")
-print("[YOLOv8] Training parameters:")
-print(f"  • Epochs: 50")
-print(f"  • Batch size: 16")
-print(f"  • Image size: 640x640")
-print(f"  • Device: GPU (if available)")
-print(f"  • Dataset: 70/15/15 train/val/test split")
+    # Load weights only — do NOT use resume=True
+    # resume=True re-reads dataset/optimizer from checkpoint metadata which can
+    # point to the wrong dataset and cause an optimizer state dict crash.
+    model = YOLO(str(LAST_WEIGHTS))
 
-# Train the model
-# Why these parameters:
-# - epochs=50: Good balance between accuracy and training time
-# - batch_size=16: Fits in GPU memory, reasonable convergence
-# - imgsz=640: Standard YOLO resolution
-# - device=0: Use first GPU if available
-results = model.train(
-    data=DATASET_YAML,
-    epochs=50,
-    imgsz=640,
-    batch=16,
-    patience=10,  # Early stopping after 10 epochs without improvement
-    device=0,  # Use GPU 0 (or CPU if not available)
-    project=str(OUTPUT_DIR),
-    name='train',
-    save=True,
-    verbose=True,
-    plots=True  # Generate training plots
-)
+    results = model.train(
+        data=DATASET_YAML,      # always explicitly pass YOUR dataset
+        epochs=50,
+        imgsz=640,
+        batch=16,
+        patience=10,
+        project=str(OUTPUT_PROJECT),  # models/
+        name=OUTPUT_NAME,             # yolo_traffic_model → models/yolo_traffic_model/
+        exist_ok=True,                # reuse folder, append to results.csv
+        save=True,
+        verbose=True,
+        plots=True
+    )
 
+else:
+    print("\n[YOLOv8] No existing weights found. Starting fresh training.")
+    print("[YOLOv8] Loading YOLOv8n (nano) base model...")
+
+    model = YOLO('yolov8n.pt')
+
+    print("[YOLOv8] Training parameters:")
+    print(f"  • Epochs:     50")
+    print(f"  • Batch size: 16")
+    print(f"  • Image size: 640x640")
+    print(f"  • Dataset:    70/15/15 train/val/test split")
+
+    results = model.train(
+        data=DATASET_YAML,
+        epochs=50,
+        imgsz=640,
+        batch=16,
+        patience=10,
+        project=str(OUTPUT_PROJECT),
+        name=OUTPUT_NAME,
+        exist_ok=True,
+        save=True,
+        verbose=True,
+        plots=True
+    )
+
+# ==========================================
+# SAVE FINAL MODEL
+# ==========================================
 print("\n[YOLOv8] ✅ Training complete!")
 
-# Save final model
-model_path = OUTPUT_DIR / "train" / "weights" / "best.pt"
+model_path = OUTPUT_DIR / "weights" / "best.pt"
 if model_path.exists():
     print(f"[YOLOv8] ✅ Best model saved: {model_path}")
-    
-    # Copy to standard location
     final_model = OUTPUT_DIR / "best.pt"
-    import shutil
     shutil.copy2(model_path, final_model)
     print(f"[YOLOv8] ✅ Model copied to: {final_model}")
 else:
-    print(f"[YOLOv8] ✗ Model not found at expected location")
+    print(f"[YOLOv8] ✗ Model not found at expected location: {model_path}")
 
 print("\n[YOLOv8] Training Results:")
 print(f"  • Results saved to: {OUTPUT_DIR}")

@@ -23,8 +23,7 @@ ENV/
 *~
 
 # Models (large binary files)
-models/*.pt
-models/gbt_traffic_model/
+models/
 
 # Dependencies (JAR files, downloaded via scripts)
 spark_jobs/jars/

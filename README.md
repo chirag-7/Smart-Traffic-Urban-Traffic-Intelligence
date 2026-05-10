@@ -117,12 +117,12 @@ All datasets remain subject to their **original licenses**; obtain data independ
 
 | Modality | Dataset | Role in this repo | Typical path |
 |----------|---------|-------------------|--------------|
-| Freeway speeds | **METR-LA** | Sensor stream, adjacency-driven graph \(G\), GBT training features | `data/metr-la/METR-LA.h5`, `adj_mat.npy` or `adj_METR-LA.pkl` |
+| Freeway speeds | **METR-LA** | Sensor stream, adjacency-driven graph $G$, GBT training features | `data/metr-la/METR-LA.h5`, `adj_mat.npy` or `adj_METR-LA.pkl` |
 | Demand proxy | **NYC TLC** yellow taxi | Zone-level trip records → GPS topic | `data/nyc-taxi/yellow_tripdata_2022-01.parquet` |
 | Video / detection | **UA-DETRAC** | YOLO training; CCTV replay | `data/ua-detrac/…` → `yolo_format/` via `scripts/convert_yolo_fast.py` |
 | Weather | **OpenWeatherMap** API | Optional exogenous stream | `.env` API key |
 
-**Schema alignment (rerouting):** Let sensors be ordered as columns in the METR-LA matrix used to build \(G\). Producer messages must include **`sensor_index` \(\in \{0,\ldots,|V|-1\}\)** matching that order so streaming joins resolve to vertex identifiers `"0",…,"|V|-1"` in `graph_shortest_paths`.
+**Schema alignment (rerouting):** Order sensors like the columns of the METR-LA adjacency matrix used to build $G$. Each message must include **`sensor_index`** as an integer in $\{0,\ldots,n-1\}$ where $n=\lvert V\rvert$, so streaming joins match vertex ids `"0"` … `"n-1"` in `graph_shortest_paths`.
 
 ---
 
@@ -130,17 +130,17 @@ All datasets remain subject to their **original licenses**; obtain data independ
 
 ### 5.1 Graph construction and centrality
 
-Let \(A \in \mathbb{R}^{|V|\times|V|}\) be the adjacency matrix (METR-LA). A **directed graph** \(G=(V,E)\) is formed with an edge \(i \to j\) when \(A_{ij}>0\), \(i\neq j\). **PageRank** with damping \(\alpha=0.85\) (implemented via `networkx.pagerank`) yields a stationary score per vertex as a proxy for **structural importance** in the sensor network. **Shortest-path lengths** from each vertex to fixed landmarks \(\mathcal{L}=\{0,50,100\}\) are stored as sparse maps for downstream alerts.
+Let $A \in \mathbb{R}^{\lvert V\rvert \times \lvert V\rvert}$ be the adjacency matrix (METR-LA). A **directed graph** $G=(V,E)$ is formed with an edge $i \to j$ when $A_{ij}>0$ and $i\neq j$. **PageRank** with damping $\alpha=0.85$ (implemented via `networkx.pagerank`) yields a stationary score per vertex as a proxy for **structural importance** in the sensor network. **Shortest-path lengths** from each vertex to fixed landmarks $\mathcal{L}=\{0,50,100\}$ are stored as sparse maps for downstream alerts.
 
 ### 5.2 Congestion detection and rerouting artifacts
 
-At micro-batch time \(t\), let \(S_t\) be the set of readings with speed \(v < \tau\) (implementation: \(\tau = 20\) mph). For each congested index \(k \in S_t\) with valid `sensor_index`, the pipeline **filters** precomputed rows where `id == str(k)` and **appends** matching shortest-path structures to `delta_tables/rerouting_alerts`. This encodes a **reactive subgraph lookup** rather than a full dynamic traffic assignment solver—appropriate for a research prototype.
+At micro-batch time $t$, let $S_t$ be the set of readings with speed $v < \tau$ (implementation: $\tau = 20$ mph). For each congested index $k \in S_t$ with valid `sensor_index`, the pipeline **filters** precomputed rows where `id == str(k)` and **appends** matching shortest-path structures to `delta_tables/rerouting_alerts`. This encodes a **reactive subgraph lookup** rather than a full dynamic traffic assignment solver—appropriate for a research prototype.
 
 ### 5.3 Speed prediction (supervised)
 
 **Features:** hour-of-day, day-of-week, Unix timestamp (via `unix_timestamp`). **Label:** reported speed. **Model:** Spark MLlib **GBTRegressor** within a pipeline with **standardized** assembled features (see `spark_jobs/ml_predictor.py`). **Note:** The default configuration trains on a **prefix** of timestamps (`[:1000]`) to bound memory on commodity hardware; ablations should vary this window and report sensitivity.
 
-**Reported metrics:** RMSE and \(R^2\) on a held-out split (80/20, seed 42).
+**Reported metrics:** RMSE and $R^2$ on a held-out split (80/20, seed 42).
 
 ### 5.4 Computer vision branch
 
@@ -205,12 +205,12 @@ Variables include `OPENWEATHER_API_KEY`, `KAFKA_BOOTSTRAP_SERVERS`, optional `WE
 
 | Aspect | What to report |
 |--------|----------------|
-| Regression | RMSE, \(R^2\) from `ml_predictor.py` stdout; sensitivity to training window size |
+| Regression | RMSE, $R^2$ from `ml_predictor.py` stdout; sensitivity to training window size |
 | Detection | mAP / precision-recall from Ultralytics logs (not wired automatically into Delta) |
 | Streaming | End-to-end latency (Kafka lag, batch interval), idempotency after checkpoint reset |
 | Rerouting | Row counts in `rerouting_alerts` vs. ground-truth incident labels (if simulated) |
 
-**Threats to validity:** single-city graphs; taxi demand as a coarse proxy for congestion; YOLO counts without camera calibration; **no** online calibration of \(\tau\); local Spark **without** cluster fault-injection tests.
+**Threats to validity:** single-city graphs; taxi demand as a coarse proxy for congestion; YOLO counts without camera calibration; **no** online calibration of $\tau$; local Spark **without** cluster fault-injection tests.
 
 ---
 
@@ -219,7 +219,7 @@ Variables include `OPENWEATHER_API_KEY`, `KAFKA_BOOTSTRAP_SERVERS`, optional `WE
 - **Scale:** Designed for lab-scale replay; cluster deployment and exactly-once semantics require further engineering.
 - **Routing:** Shortest paths on a **static** topology do not reflect time-varying travel times.
 - **Privacy:** Base64 frames and trip records are sensitive; this prototype assumes **local, trusted** execution.
-- **Extensions:** Online learning for GBT, Graph Neural Networks on \(G\), uncertainty quantification for predictions, integration with open routing APIs.
+- **Extensions:** Online learning for GBT, Graph Neural Networks on $G$, uncertainty quantification for predictions, integration with open routing APIs.
 
 ---
 

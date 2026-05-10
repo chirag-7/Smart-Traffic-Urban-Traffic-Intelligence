@@ -2,8 +2,6 @@
 
 **Keywords:** intelligent transportation systems (ITS), stream processing, Apache Kafka, Apache Spark, Delta Lake, graph analytics, congestion detection, gradient boosting, YOLOv8, reproducible pipelines.
 
-**Maintainer:** [Zubair Abbas](https://github.com/zubiiabbasi) · Repository: [github.com/zubiiabbasi/smart-traffic](https://github.com/zubiiabbasi/smart-traffic)
-
 ---
 
 ## Quick start

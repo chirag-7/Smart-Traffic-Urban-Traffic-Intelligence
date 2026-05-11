@@ -159,6 +159,7 @@ services:
       context: ./yolo_worker
       dockerfile: Dockerfile
     image: smart-traffic/yolo-worker:phase1
+    pull_policy: build
     depends_on:
       kafka:
         condition: service_healthy
@@ -189,6 +190,63 @@ services:
     deploy:
       replicas: 2
     mem_limit: 1500m
+    cpus: 1.0
+    restart: unless-stopped
+
+  # ==========================================================================
+  # Phase 2 — ML predictor (LightGBM exported to ONNX, ran by onnxruntime)
+  # ==========================================================================
+
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:v2.13.0
+    container_name: mlflow
+    ports:
+      - "5000:5000"
+    command: >
+      mlflow server
+      --host 0.0.0.0 --port 5000
+      --backend-store-uri sqlite:////mlflow/mlflow.db
+      --default-artifact-root /mlflow/artifacts
+    volumes:
+      - mlflow-data:/mlflow
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:5000/health', timeout=5).status==200 else 1)\""]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    mem_limit: 512m
+    cpus: 0.5
+
+  ml-predictor-worker:
+    build:
+      context: ./ml_predictor_worker
+      dockerfile: Dockerfile
+    image: smart-traffic/ml-predictor-worker:phase2
+    pull_policy: build
+    container_name: ml-predictor-worker
+    depends_on:
+      kafka:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+    environment:
+      KAFKA_BROKERS: kafka:29092
+      INPUT_TOPIC: ${TOPIC_SENSORS:-topic_sensors}
+      OUTPUT_TOPIC: ${TOPIC_SPEED_PREDICTIONS:-topic_speed_predictions}
+      CONSUMER_GROUP: ml-predictor-workers
+      ML_MODEL_PATH: /app/models/speed_predictor.onnx
+      ML_MODEL_META_PATH: /app/models/speed_predictor_meta.json
+      ML_MODEL_VERSION: ${ML_MODEL_VERSION:-lgbm_speed_v1}
+      ML_WORKER_METRICS_PORT: 9101
+      SCHEMA_DIR: /app/schemas
+      DELTA_SENSOR_PATH: /opt/delta_tables/sensor_speeds
+      ML_WARM_START_MINUTES: ${ML_WARM_START_MINUTES:-30}
+    volumes:
+      - ./schemas:/app/schemas:ro
+      - ./models:/app/models:ro
+      - ./delta_tables:/opt/delta_tables:ro
+    mem_limit: 512m
     cpus: 1.0
     restart: unless-stopped
 
@@ -241,3 +299,4 @@ volumes:
   minio-data:
   prometheus-data:
   grafana-data:
+  mlflow-data:

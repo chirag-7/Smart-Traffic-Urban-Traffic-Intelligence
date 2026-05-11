@@ -78,7 +78,7 @@ def main() -> None:
         linger_ms=20,
         batch_size=64 * 1024,
         acks="all",
-        compression_type="lz4",
+        compression_type="gzip",
     )
 
     logger.info("Reading %s (this may take a moment for large files)…", src)

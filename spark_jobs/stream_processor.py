@@ -51,6 +51,7 @@ TOPIC_SENSORS = os.getenv("TOPIC_SENSORS", "topic_sensors")
 TOPIC_GPS = os.getenv("TOPIC_GPS", "topic_gps")
 TOPIC_CCTV_INFERRED = os.getenv("TOPIC_CCTV_INFERRED", "topic_cctv_inferred")
 TOPIC_WEATHER = os.getenv("TOPIC_WEATHER", "topic_weather")
+TOPIC_SPEED_PREDICTIONS = os.getenv("TOPIC_SPEED_PREDICTIONS", "topic_speed_predictions")
 
 # Autodetect Kafka bootstrap depending on whether we resolve the internal
 # Docker DNS name (when running on host, we won't — fall back to localhost).
@@ -324,9 +325,47 @@ weather_query = (
     .start("delta_tables/weather")
 )
 
+# ============================================================================
+# --- Branch E: speed predictions (NEW — Phase 2 ml_predictor_worker output) ---
+# ============================================================================
+speed_pred_schema = StructType(
+    [
+        StructField("sensor_id", StringType()),
+        StructField("timestamp", StringType()),
+        StructField("actual_speed", FloatType(), True),
+        StructField("predicted_speed", FloatType()),
+        StructField("horizon_minutes", IntegerType(), True),
+        StructField("model_version", StringType()),
+        StructField("inference_us", FloatType(), True),
+        StructField("processed_at", DoubleType(), True),
+    ]
+)
+
+speed_pred_stream = (
+    spark.readStream.format("kafka")
+    .option("kafka.bootstrap.servers", KAFKA_SPARK)
+    .option("subscribe", TOPIC_SPEED_PREDICTIONS)
+    .option("startingOffsets", "latest")
+    .option("maxOffsetsPerTrigger", 5000)
+    .load()
+    .select(from_json(col("value").cast("string"), speed_pred_schema).alias("d"))
+    .select("d.*")
+    .withColumn("event_date", to_date(col("timestamp").cast("timestamp")))
+)
+
+speed_pred_query = (
+    speed_pred_stream.writeStream.format("delta")
+    .option("checkpointLocation", "delta_tables/checkpoints/speed_predictions")
+    .partitionBy("event_date")
+    .outputMode("append")
+    .trigger(processingTime="5 seconds")
+    .start("delta_tables/speed_predictions")
+)
+
 logger.info(
-    "Streaming active — CCTV→cv_vehicle_counts (from %s) | sensors→sensor_speeds + rerouting_alerts | GPS→gps_trips | weather→weather",
+    "Streaming active — CCTV→cv_vehicle_counts (from %s) | sensors→sensor_speeds + rerouting_alerts | GPS→gps_trips | weather→weather | predictions→speed_predictions (from %s)",
     TOPIC_CCTV_INFERRED,
+    TOPIC_SPEED_PREDICTIONS,
 )
 logger.info("Stop with Ctrl+C.")
 

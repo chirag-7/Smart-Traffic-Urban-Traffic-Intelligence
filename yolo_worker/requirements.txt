@@ -1,8 +1,21 @@
 confluent-kafka>=2.4.0
-ultralytics==8.0.200
+# ultralytics >=8.0.215 is needed because checkpoints trained with newer
+# ultralytics versions serialise a `DFLoss` class that older versions can't
+# unpickle. 8.3.x is the current stable line and unpickles all recent
+# checkpoints.
+ultralytics>=8.3.0,<8.4
+# ByteTrack inside ultralytics requires `lap` (Linear Assignment Problem
+# solver) for the Hungarian-algorithm step that matches detections across
+# frames to stable IDs. Without this pin, ultralytics runs an AutoUpdate
+# pip install on first model.track() call inside the container, which
+# emits a confusing "Restart runtime" warning.
+lap>=0.5.12
 opencv-python-headless>=4.9.0
 boto3>=1.34.0
 prometheus-client>=0.20.0
 jsonschema>=4.21.0
 pillow>=10.1.0
-numpy>=1.26.0
+# torch==2.2.2 was compiled against numpy<2; pinning here prevents the
+# "Failed to initialize NumPy: _ARRAY_API not found" ABI warning that
+# silently breaks the YOLO module load.
+numpy>=1.26.0,<2.0

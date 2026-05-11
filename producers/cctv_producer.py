@@ -149,7 +149,7 @@ def main() -> None:
         batch_size=64 * 1024,
         max_request_size=10 * 1024 * 1024,
         acks="all",
-        compression_type="lz4",
+        compression_type="gzip",
     )
     logger.info(
         "CCTV producer | kafka=%s topic=%s fps=%s cameras=%s frames/cam=%s layout=%s loop=%s",

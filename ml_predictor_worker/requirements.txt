@@ -1,0 +1,9 @@
+confluent-kafka>=2.4.0
+onnxruntime>=1.17.0
+deltalake>=0.16.0
+prometheus-client>=0.20.0
+jsonschema>=4.21.0
+pandas>=2.1.0
+# Pin numpy<2 for ABI consistency with prebuilt onnxruntime wheels and
+# to match the rest of the stack.
+numpy>=1.26.0,<2.0

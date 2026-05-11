@@ -21,8 +21,21 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 
 # Install Python deps first (cache-friendly).
+#
+# IMPORTANT: ultralytics pulls torch as a dependency. On Linux the default
+# pip install of torch downloads the CUDA-enabled wheel (~530 MB) plus a
+# pile of nvidia-* wheels (~3 GB more), even when there is no GPU. We
+# explicitly pre-install the CPU-only torch wheel from PyTorch's cpu index
+# BEFORE installing ultralytics, so the dependency resolver sees torch is
+# already satisfied and skips the CUDA pull. Drops final image size from
+# ~5 GB to ~1.5 GB.
 COPY requirements.txt ./
-RUN pip install --upgrade pip && pip install -r requirements.txt
+RUN pip install --upgrade pip \
+ && pip install --no-cache-dir \
+        --index-url https://download.pytorch.org/whl/cpu \
+        --extra-index-url https://pypi.org/simple \
+        torch==2.2.2+cpu torchvision==0.17.2+cpu \
+ && pip install --no-cache-dir -r requirements.txt
 
 # Application code.
 COPY main.py ./

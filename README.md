@@ -8,12 +8,12 @@
 
 Urban traffic management increasingly relies on **heterogeneous data streams** — loop detectors, floating-car probes, video feeds, and environmental sensors — processed under latency and consistency constraints. This repository implements an **end-to-end experimental pipeline** that
 
-1. ingests four modalities through **Apache Kafka** (6 topics, 3 partitions each, 24-hour retention);
-2. delegates compute-intensive inference to **dedicated Kafka-to-Kafka microservices** — a CPU-based **YOLOv8 + ByteTrack** worker for vehicle detection and tracking, and a **LightGBM → ONNX Runtime** worker for short-term speed prediction;
-3. stores annotated video frames in **MinIO** (S3-compatible object storage) and structured analytics in **Delta Lake** via **Spark Structured Streaming** with exactly-once, partitioned, idempotent writes;
-4. applies **NetworkX**-based **PageRank** and **multi-source shortest paths** on a road-sensor graph derived from **METR-LA**;
-5. exposes real-time signals through a **Streamlit** dashboard with fragment-based partial refresh and a **pydeck** congestion heat map; and
-6. monitors pipeline health via **Prometheus** metrics, **Grafana** auto-provisioned dashboards, and a dedicated Kafka consumer-lag monitor.
+1. Ingests four modalities through **Apache Kafka** (6 topics, 3 partitions each, 24-hour retention);
+2. Delegates compute-intensive inference to **dedicated Kafka-to-Kafka microservices** — a CPU-based **YOLOv8 + ByteTrack** worker for vehicle detection and tracking, and a **LightGBM → ONNX Runtime** worker for short-term speed prediction;
+3. Stores annotated video frames in **MinIO** (S3-compatible object storage) and structured analytics in **Delta Lake** via **Spark Structured Streaming** with exactly-once, partitioned, idempotent writes;
+4. Applies **NetworkX**-based **PageRank** and **multi-source shortest paths** on a road-sensor graph derived from **METR-LA**;
+5. Exposes real-time signals through a **Streamlit** dashboard with fragment-based partial refresh and a **pydeck** congestion heat map; and
+6. Monitors pipeline health via **Prometheus** metrics, **Grafana** auto-provisioned dashboards, and a dedicated Kafka consumer-lag monitor.
 
 The design emphasizes **separation of concerns**: Spark never makes synchronous calls to external services; every heavy operation (CV inference, ML inference, object-store upload) runs in an independent worker that communicates exclusively through Kafka. The system targets **Windows workstations with Docker Desktop** and requires no GPU.
 

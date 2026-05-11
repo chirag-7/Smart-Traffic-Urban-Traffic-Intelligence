@@ -1,10 +1,19 @@
 # Environment
 .env
+.env.local
 venv/
+env/
+ENV/
 
-# Data (too large for Git)
+# Local data and lake (too large for Git)
 data/
 delta_tables/
+
+# Trained models — large binary files, distributed out-of-band.
+models/
+
+# Phase 3 streaming logs (created by scripts/run_streaming.ps1)
+logs/
 
 # Python
 __pycache__/
@@ -12,8 +21,8 @@ __pycache__/
 *.pyo
 *.pyd
 .Python
-env/
-ENV/
+.pytest_cache/
+.coverage
 
 # IDE
 .vscode/
@@ -22,12 +31,6 @@ ENV/
 *.swo
 *~
 
-# Models (large binary files)
-models/
-
-# Dependencies (JAR files, downloaded via scripts)
-spark_jobs/jars/
-
 # Jupyter
 .ipynb_checkpoints/
 *.ipynb
@@ -35,4 +38,3 @@ spark_jobs/jars/
 # OS
 .DS_Store
 Thumbs.db
-.env.local

@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "smart-traffic/cctv_inferred.json",
+  "title": "topic_cctv_inferred message",
+  "description": "Inference result produced by yolo_worker. The annotated JPEG is uploaded to MinIO and referenced by frame_url; the image is NOT inlined in the message.",
+  "type": "object",
+  "required": [
+    "camera_id",
+    "frame_id",
+    "timestamp",
+    "unique_count_5min",
+    "unique_count_session",
+    "track_ids",
+    "frame_url",
+    "inference_ms",
+    "model_version"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "camera_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "frame_id":  { "type": "string", "minLength": 1, "maxLength": 256 },
+    "timestamp": { "type": "number", "minimum": 0 },
+    "unique_count_5min":    { "type": "integer", "minimum": 0 },
+    "unique_count_session": { "type": "integer", "minimum": 0 },
+    "track_ids": {
+      "type": "array",
+      "items": { "type": "integer", "minimum": 0 }
+    },
+    "frame_url":     { "type": "string", "format": "uri", "minLength": 1 },
+    "inference_ms":  { "type": "number", "minimum": 0 },
+    "model_version": { "type": "string", "minLength": 1, "maxLength": 64 },
+    "worker_id":     { "type": "string", "maxLength": 64 },
+    "processed_at":  { "type": "number", "minimum": 0 }
+  }
+}

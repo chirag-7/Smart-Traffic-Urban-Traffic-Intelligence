@@ -1,12 +1,22 @@
 """
-Offline speed prediction with Spark MLlib on METR-LA.
+Spark MLlib speed-prediction trainer — RESEARCH BASELINE (deprecated for production).
 
-Reads a slice of ``data/metr-la/METR-LA.h5`` via h5py (avoids heavy pandas HDF paths on Windows),
-engineers time features, trains a GBT regressor pipeline, saves the model under
-``models/speed_prediction_pipeline``, and writes predictions to ``delta_tables/speed_predictions``
-for the dashboard.
+This script is preserved as a research baseline to enable A/B comparison
+against the production LightGBM → ONNX worker. **The production training and
+serving pipeline is** ``ml/train_speed_model.py`` **+** ``ml_predictor_worker/``,
+which is faster, lighter, and avoids the per-batch MLlib initialisation
+overhead the reviewer flagged.
 
-Training uses the first 1000 timestamps by default to bound memory; increase in code for fuller fits.
+What this script still does:
+  - Reads a slice of ``data/metr-la/METR-LA.h5`` via h5py.
+  - Engineers time features (hour, day-of-week, unix timestamp).
+  - Trains a Spark MLlib GBTRegressor.
+  - Saves the pipeline to ``models/speed_prediction_pipeline``.
+  - Writes test-set predictions to ``delta_tables/speed_predictions``  (legacy
+    schema — the LIVE worker writes a different schema with ``predicted_speed``,
+    ``actual_speed``, ``model_version`` — see ``schemas/speed_predictions.json``).
+
+Training uses the first 1000 timestamps by default to bound memory.
 """
 
 from __future__ import annotations
@@ -113,16 +123,18 @@ rmse = evaluator.evaluate(predictions, {evaluator.metricName: "rmse"})
 r2 = evaluator.evaluate(predictions, {evaluator.metricName: "r2"})
 logger.info("Metrics — RMSE: %.4f  R²: %.4f", rmse, r2)
 
-model_out = Path("models/speed_prediction_pipeline")
+model_out = Path("models/_baseline_speed_prediction_pipeline_mllib")
 if model_out.exists():
     shutil.rmtree(model_out)
 model.write().overwrite().save(str(model_out))
-logger.info("Saved model to %s", model_out)
+logger.info("Saved MLlib baseline model to %s", model_out)
 
-delta_out = Path("delta_tables/speed_predictions")
+# Write to a separate Delta path so the legacy schema does not collide with
+# the production speed_predictions table (which the ONNX worker populates).
+delta_out = Path("delta_tables/_baseline_speed_predictions_mllib")
 predictions.select("sensor_id", "timestamp", "speed", "prediction").write.format("delta").mode(
     "overwrite"
 ).save(str(delta_out))
-logger.info("Saved predictions Delta table to %s", delta_out)
+logger.info("Saved MLlib baseline predictions Delta table to %s", delta_out)
 
 spark.stop()

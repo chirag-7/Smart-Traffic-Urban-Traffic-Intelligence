@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "smart-traffic/cctv_raw.json",
+  "title": "topic_cctv message",
+  "description": "Raw CCTV frame emitted by cctv_producer.py. Payload includes a base64-encoded JPEG and origin metadata. Sticky-partitioned by camera_id.",
+  "type": "object",
+  "required": ["camera_id", "frame_id", "timestamp", "frame_b64"],
+  "additionalProperties": false,
+  "properties": {
+    "camera_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "frame_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "timestamp": {
+      "type": "number",
+      "description": "Unix epoch seconds when the producer ingested the frame.",
+      "minimum": 0
+    },
+    "frame_b64": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Base64-encoded JPEG bytes (no data: prefix)."
+    },
+    "ingested_at": {
+      "type": "number",
+      "description": "Optional duplicate of timestamp; reserved for end-to-end latency tracking.",
+      "minimum": 0
+    },
+    "producer_id": {
+      "type": "string",
+      "maxLength": 64
+    }
+  }
+}

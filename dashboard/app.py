@@ -1,21 +1,31 @@
 """
-Streamlit dashboard for Delta tables produced by the streaming and batch jobs.
+Smart Traffic — Phase 4 dashboard (Streamlit).
 
-Reads from ``../delta_tables`` via a local Spark session with the Delta Lake package.
-Auto-refreshes on an interval; use “Refresh Now” for immediate reload.
-
-Tables consumed: ``cv_vehicle_counts``, ``sensor_speeds``, ``speed_predictions``,
-``rerouting_alerts``, ``gps_trips``, ``weather``.
+Highlights:
+  - No PySpark / JVM. Reads Delta tables via the Rust-based `deltalake` package
+    (10-50 ms per read instead of 3-8 s spinning up a Spark session).
+  - `@st.fragment(run_every=...)` for the heavy widgets so the CCTV grid and
+    map redraw independently from the metric cards. No more whole-page flicker.
+  - `st_autorefresh` keeps top-level metrics refreshing every 5 s.
+  - `orderBy(timestamp desc).limit(N)` everywhere → the dashboard shows the
+    actual most-recent rows rather than arbitrary scan order.
+  - Annotated CCTV frames are loaded *by URL* from MinIO — Delta only stores
+    the pointer.
 """
 
 from __future__ import annotations
 
-import time
+import os
+from datetime import datetime, timezone
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
+import pydeck as pdk
 import streamlit as st
+from deltalake import DeltaTable
 from dotenv import load_dotenv
+from streamlit_autorefresh import st_autorefresh
 
 load_dotenv()
 
@@ -26,177 +36,330 @@ st.set_page_config(
 )
 
 DELTA_BASE = Path(__file__).resolve().parent.parent / "delta_tables"
+MINIO_BASE = os.getenv("MINIO_PUBLIC_BASE_URL", "http://localhost:9000/cctv-frames")
+CONGESTION_THRESHOLD = float(os.getenv("CONGESTION_THRESHOLD_MPH", "20.0"))
 
 
-@st.cache_resource(show_spinner="Connecting to Spark...")
-def get_spark():
-    from pyspark.sql import SparkSession
+# ---------------------------------------------------------------------------
+# Delta readers (cached, no Spark)
+# ---------------------------------------------------------------------------
 
-    spark = (
-        SparkSession.builder.appName("TrafficDashboard")
-        .master("local[*]")
-        .config("spark.jars.packages", "io.delta:delta-core_2.12:2.4.0")
-        .config("spark.sql.extensions", "io.delta.sql.DeltaSparkSessionExtension")
-        .config(
-            "spark.sql.catalog.spark_catalog",
-            "org.apache.spark.sql.delta.catalog.DeltaCatalog",
-        )
-        .config("spark.driver.memory", "2g")
-        .config("spark.sql.shuffle.partitions", "4")
-        .getOrCreate()
-    )
-    spark.sparkContext.setLogLevel("ERROR")
-    return spark
-
-
-def read_delta(spark, table_name: str, limit: int = 500):
-    from pyspark.sql.functions import col
-
-    path = DELTA_BASE / table_name
+@st.cache_data(ttl=5, show_spinner=False)
+def read_table(name: str, limit: int = 500, sort_col: str | None = "timestamp") -> pd.DataFrame:
+    path = DELTA_BASE / name
+    if not path.exists():
+        return pd.DataFrame()
     try:
-        df = spark.read.format("delta").load(str(path))
-        if "timestamp" in df.columns:
-            df = df.withColumn("timestamp", col("timestamp").cast("string"))
-        return df.limit(limit).toPandas()
-    except Exception as exc:
-        st.warning(f"Could not read {table_name}: {exc}")
-        return None
+        df = DeltaTable(str(path)).to_pandas()
+    except Exception as exc:  # noqa: BLE001
+        # Surface the error in the UI instead of silently returning empty,
+        # which made deltalake/pyarrow compatibility bugs invisible.
+        st.warning(f"Could not read `delta_tables/{name}`: {type(exc).__name__}: {exc}")
+        return pd.DataFrame()
+    if df.empty:
+        return df
+    if sort_col and sort_col in df.columns:
+        df = df.sort_values(sort_col, ascending=False)
+    return df.head(limit)
 
 
-st.title("Smart City Traffic Intelligence")
+def to_image_url(frame_url: str) -> str:
+    """Frame URLs are stored in MinIO; rewrite if MINIO_PUBLIC_BASE_URL changed."""
+    if not frame_url:
+        return ""
+    if MINIO_BASE in frame_url:
+        return frame_url
+    try:
+        suffix = frame_url.split("/cctv-frames/", 1)[1]
+        return f"{MINIO_BASE.rstrip('/')}/{suffix}"
+    except IndexError:
+        return frame_url
+
+
+# ---------------------------------------------------------------------------
+# Header
+# ---------------------------------------------------------------------------
+
+st_autorefresh(interval=5_000, key="top_metrics_refresh")
+
+st.title("🚦 Smart City Traffic Intelligence")
 st.caption(
-    "Kafka → Spark Streaming → Delta Lake; CCTV counts from YOLOv8; "
-    "congestion-triggered rerouting using precomputed graph paths."
+    "Pure event-driven pipeline: Kafka → YOLO/ONNX workers → MinIO/Delta. "
+    "Dashboard reads Delta via deltalake-rs (no JVM)."
 )
 
-spark = get_spark()
 
-col1, col2, col3, col4 = st.columns(4)
+# ---------------------------------------------------------------------------
+# Metrics strip (always live, refreshes every 5 s)
+# ---------------------------------------------------------------------------
 
-cv_df = read_delta(spark, "cv_vehicle_counts")
-sensor_df = read_delta(spark, "sensor_speeds")
-pred_df = read_delta(spark, "speed_predictions")
-alert_df = read_delta(spark, "rerouting_alerts")
-weather_df = read_delta(spark, "weather", limit=200)
+cv_df = read_table("cv_vehicle_counts", limit=2000, sort_col="timestamp")
+sensors_df = read_table("sensor_speeds", limit=5000, sort_col="timestamp")
+weather_df = read_table("weather", limit=200, sort_col="timestamp")
 
-with col1:
-    total_vehicles = int(cv_df["vehicle_count"].sum()) if cv_df is not None else 0
-    st.metric("Vehicles detected (stream)", f"{total_vehicles:,}")
+col_m1, col_m2, col_m3, col_m4 = st.columns(4)
 
-with col2:
-    avg_speed = sensor_df["speed"].mean() if sensor_df is not None else 0
-    st.metric("Avg network speed (mph)", f"{avg_speed:.1f}")
-
-with col3:
-    congested = int((sensor_df["speed"] < 20).sum()) if sensor_df is not None else 0
-    st.metric("Congested readings (<20 mph)", congested)
-
-with col4:
-    if weather_df is not None and len(weather_df) > 0:
-        try:
-            weather_df = weather_df.copy()
-            weather_df["timestamp"] = pd.to_numeric(weather_df["timestamp"], errors="coerce")
-            latest = weather_df.sort_values("timestamp", ascending=False).iloc[0]
-            temp_c = latest.get("temp_c")
-            cond = latest.get("weather_main") or latest.get("weather_description")
-            st.metric("Latest temp (°C)", f"{temp_c:.1f}" if temp_c is not None else "n/a")
-            st.caption(f"{latest.get('city', '')} — {cond}")
-        except Exception:
-            st.info("Weather data present but could not parse latest row.")
+with col_m1:
+    if not cv_df.empty and "unique_count_5min" in cv_df.columns:
+        latest_per_camera = cv_df.sort_values("timestamp").groupby("camera_id").tail(1)
+        total = int(latest_per_camera["unique_count_5min"].sum())
+        active_cams = int(latest_per_camera["camera_id"].nunique())
+        st.metric("Unique vehicles (5-min window)", f"{total:,}",
+                  delta=f"{active_cams} active camera(s)")
     else:
-        st.info("No weather rows yet.")
+        st.metric("Unique vehicles (5-min window)", "—")
+        st.caption("No CCTV data yet — start cctv_producer.py.")
 
-    alerts = len(alert_df) if alert_df is not None else 0
-    st.metric("Rerouting alert rows", alerts)
-
-st.divider()
-
-col_left, col_right = st.columns(2)
-
-with col_left:
-    st.subheader("Sensor speeds (mean, sample)")
-    if sensor_df is not None and len(sensor_df) > 0:
-        speed_by_sensor = (
-            sensor_df.groupby("sensor_id")["speed"].mean().head(20).sort_values(ascending=False)
-        )
-        st.bar_chart(speed_by_sensor)
+with col_m2:
+    if not sensors_df.empty and "speed" in sensors_df.columns:
+        avg = float(sensors_df["speed"].mean())
+        st.metric("Avg network speed", f"{avg:.1f} mph")
     else:
-        st.info("Waiting for sensor Delta data.")
+        st.metric("Avg network speed", "—")
 
-with col_right:
-    st.subheader("Vehicle counts by camera")
-    if cv_df is not None and len(cv_df) > 0:
-        by_cam = cv_df.groupby("camera_id")["vehicle_count"].sum().sort_values(ascending=False)
-        st.bar_chart(by_cam)
+with col_m3:
+    if not sensors_df.empty and "speed" in sensors_df.columns:
+        congested_pct = float((sensors_df["speed"] < CONGESTION_THRESHOLD).mean() * 100)
+        st.metric(f"Congested (<{int(CONGESTION_THRESHOLD)} mph)", f"{congested_pct:.1f}%")
     else:
-        st.info("Waiting for CCTV Delta data.")
+        st.metric("Congested", "—")
 
-st.divider()
-
-col_ml, col_alert = st.columns(2)
-
-with col_ml:
-    st.subheader("Speed predictions vs actual")
-    if pred_df is not None and len(pred_df) > 0:
-        pred_df = pred_df.copy()
-        pred_df["speed"] = pd.to_numeric(pred_df["speed"], errors="coerce")
-        pred_df["prediction"] = pd.to_numeric(pred_df["prediction"], errors="coerce")
-        pred_df = pred_df.dropna(subset=["speed", "prediction"])
-        if len(pred_df) > 0:
-            pred_df["error"] = (pred_df["speed"] - pred_df["prediction"]).abs()
-            st.dataframe(
-                pred_df[["sensor_id", "speed", "prediction", "error"]].head(30),
-                use_container_width=True,
-            )
-            st.metric("Mean absolute error (mph)", f"{pred_df['error'].mean():.2f}")
+with col_m4:
+    if not weather_df.empty and "temp_c" in weather_df.columns:
+        latest = weather_df.iloc[0]
+        temp = latest.get("temp_c")
+        cond = latest.get("weather_main") or latest.get("weather_description") or "—"
+        if pd.notna(temp):
+            st.metric(f"{latest.get('city','—')} weather", f"{float(temp):.1f}°C")
+            st.caption(str(cond))
         else:
-            st.info("No valid numeric predictions.")
+            st.metric("Weather", "—")
     else:
-        st.info("Run ``spark_jobs/ml_predictor.py`` first.")
-
-with col_alert:
-    st.subheader("Rerouting alerts")
-    if alert_df is not None and len(alert_df) > 0:
-        st.dataframe(alert_df.head(20), use_container_width=True)
-    else:
-        st.info("No rerouting rows yet.")
+        st.metric("Weather", "—")
 
 st.divider()
 
-st.subheader("Data explorer")
-explorer_tab1, explorer_tab2, explorer_tab3 = st.tabs(["Sensor speeds", "Vehicle counts", "GPS trips"])
 
-with explorer_tab1:
-    if sensor_df is not None:
-        st.write("Records (limited): ", len(sensor_df))
-        st.dataframe(sensor_df.head(50), use_container_width=True)
-    else:
-        st.info("No sensor data.")
+# ---------------------------------------------------------------------------
+# Tabs — heavy widgets each isolated in a fragment
+# ---------------------------------------------------------------------------
 
-with explorer_tab2:
-    if cv_df is not None:
-        st.write("Records (limited): ", len(cv_df))
-        st.dataframe(cv_df.head(50), use_container_width=True)
-    else:
-        st.info("No CCTV-derived data.")
+tab_live, tab_map, tab_ml, tab_alerts, tab_explore = st.tabs(
+    ["📷 Live CCTV", "🗺️ Congestion Map", "📈 ML Predictions", "🚨 Alerts", "🔎 Explorer"]
+)
 
-with explorer_tab3:
-    gps_df = read_delta(spark, "gps_trips")
-    if gps_df is not None:
-        st.write("Records (limited): ", len(gps_df))
-        st.dataframe(gps_df.head(50), use_container_width=True)
+
+# ---------- Live CCTV grid ----------
+
+@st.fragment(run_every=5)
+def cctv_grid():
+    cv = read_table("cv_vehicle_counts", limit=200, sort_col="timestamp")
+    if cv.empty:
+        st.info(
+            "No CCTV inferences yet. Start the producer with "
+            "`python producers/cctv_producer.py --fps 2 --loop --source-layout detrac` "
+            "and the YOLO worker will populate this view."
+        )
+        return
+
+    latest_per_camera = cv.sort_values("timestamp").groupby("camera_id").tail(1)
+    latest_per_camera = latest_per_camera.sort_values("timestamp", ascending=False)
+    cameras = latest_per_camera.to_dict("records")
+
+    cols = st.columns(min(len(cameras), 4) or 1)
+    for i, row in enumerate(cameras[:8]):
+        with cols[i % len(cols)]:
+            url = to_image_url(row.get("frame_url", ""))
+            cap_count = row.get("unique_count_5min", 0) or 0
+            session_count = row.get("unique_count_session", 0) or 0
+            cap = f"{row.get('camera_id', '?')} — {cap_count} veh (5m), {session_count} total"
+            if url:
+                try:
+                    st.image(url, caption=cap, width="stretch")
+                except Exception:  # noqa: BLE001
+                    st.warning(f"Could not load {url}")
+            else:
+                st.warning(f"No frame URL for {row.get('camera_id')}")
+
+
+with tab_live:
+    st.subheader("Most recent annotated frame per camera")
+    st.caption("Click an image to view full size. Refreshes every 5 seconds.")
+    cctv_grid()
+
+
+# ---------- Congestion map ----------
+
+@st.fragment(run_every=10)
+def congestion_map():
+    sensors = read_table("sensor_speeds", limit=20_000, sort_col="timestamp")
+    metadata = read_table("sensor_metadata", limit=500, sort_col=None)
+    if sensors.empty or metadata.empty:
+        st.info(
+            "Map needs both sensor_speeds and sensor_metadata. "
+            "Run `python spark_jobs/load_sensor_metadata.py` once and "
+            "start sensor_producer.py."
+        )
+        return
+
+    # Most recent reading per sensor.
+    latest = sensors.sort_values("timestamp").groupby("sensor_id").tail(1)
+    merged = latest.merge(metadata, on="sensor_id", how="inner")
+    if merged.empty:
+        st.info("Sensor IDs in stream don't match sensor_metadata. "
+                "Did you run load_sensor_metadata.py with a real METR-LA CSV?")
+        return
+
+    # Speed → colour: red < threshold, yellow < 40, green ≥ 40.
+    def speed_color(speed: float) -> list[int]:
+        if speed < CONGESTION_THRESHOLD:
+            return [220, 50, 50, 200]
+        if speed < 40:
+            return [240, 200, 60, 200]
+        return [80, 200, 100, 200]
+
+    merged["color"] = merged["speed"].apply(speed_color)
+    merged["radius"] = (80 - merged["speed"].clip(0, 80)) * 4 + 50
+
+    view = pdk.ViewState(
+        latitude=float(merged["lat"].mean()),
+        longitude=float(merged["lon"].mean()),
+        zoom=10,
+        pitch=0,
+    )
+    layer = pdk.Layer(
+        "ScatterplotLayer",
+        data=merged,
+        get_position=["lon", "lat"],
+        get_fill_color="color",
+        get_radius="radius",
+        pickable=True,
+        opacity=0.85,
+    )
+    st.pydeck_chart(pdk.Deck(
+        layers=[layer],
+        initial_view_state=view,
+        tooltip={"text": "{sensor_id}\nSpeed: {speed} mph"},
+    ))
+    st.caption(
+        f"🟢 ≥40 mph  •  🟡 20-40 mph  •  🔴 <{int(CONGESTION_THRESHOLD)} mph  "
+        f"— circle radius scales inversely with speed."
+    )
+
+
+with tab_map:
+    st.subheader("Sensor network — current speed by location")
+    congestion_map()
+
+
+# ---------- ML predictions (scatter + residual histogram) ----------
+
+@st.fragment(run_every=10)
+def ml_predictions():
+    pred = read_table("speed_predictions", limit=5000, sort_col="processed_at")
+    if pred.empty:
+        st.info(
+            "No predictions yet. Run `python ml/train_speed_model.py` to train the "
+            "model, then start the ml-predictor-worker:\n"
+            "`docker compose up -d --force-recreate ml-predictor-worker`."
+        )
+        return
+
+    pred = pred.dropna(subset=["predicted_speed"])
+    if "actual_speed" in pred.columns:
+        pred = pred.dropna(subset=["actual_speed"])
+
+    if pred.empty or "actual_speed" not in pred.columns:
+        st.info("Predictions are flowing but no actual speeds yet to compare against.")
+        st.dataframe(pred.head(50), width="stretch")
+        return
+
+    residual = pred["actual_speed"] - pred["predicted_speed"]
+    rmse = float(np.sqrt(np.mean(residual ** 2)))
+    mae = float(np.mean(np.abs(residual)))
+
+    c1, c2 = st.columns([1, 1])
+    with c1:
+        st.metric("Live RMSE (last 5000)", f"{rmse:.2f} mph")
+    with c2:
+        st.metric("Live MAE", f"{mae:.2f} mph")
+
+    col_scatter, col_resid = st.columns(2)
+    with col_scatter:
+        st.markdown("**Actual vs Predicted**")
+        scatter_df = pred[["actual_speed", "predicted_speed"]].copy()
+        scatter_df.columns = ["actual", "predicted"]
+        st.scatter_chart(scatter_df, x="actual", y="predicted", height=300)
+    with col_resid:
+        st.markdown("**Residuals (actual − predicted)**")
+        hist_df = residual.to_frame(name="residual")
+        st.bar_chart(np.histogram(hist_df["residual"].values, bins=40)[0], height=300)
+
+    st.markdown("**Latest 20 predictions**")
+    st.dataframe(
+        pred[["sensor_id", "timestamp", "actual_speed", "predicted_speed", "model_version"]].head(20),
+        width="stretch",
+    )
+
+
+with tab_ml:
+    st.subheader("LightGBM (ONNX) speed predictions vs actual")
+    ml_predictions()
+
+
+# ---------- Alerts feed ----------
+
+@st.fragment(run_every=5)
+def alerts_feed():
+    alerts = read_table("rerouting_alerts", limit=20, sort_col="batch_id")
+    if alerts.empty:
+        st.info("No congestion alerts yet. Alerts fire when sensor speed dips below "
+                f"{int(CONGESTION_THRESHOLD)} mph and a landmark distance is known.")
+        return
+    for _, row in alerts.iterrows():
+        speed = row.get("speed")
+        distances = row.get("distances")
+        sid = row.get("sensor_id", "?")
+        sidx = row.get("id", "?")
+        dist_str = (
+            ", ".join(f"node {k} → {v} hops" for k, v in (distances or {}).items())
+            if isinstance(distances, dict)
+            else str(distances)
+        )
+        st.error(
+            f"🚨 Sensor **{sid}** (vertex {sidx}) at "
+            f"**{float(speed):.1f} mph** — reroute landmarks: {dist_str}"
+        )
+
+
+with tab_alerts:
+    st.subheader("Live rerouting alerts")
+    alerts_feed()
+
+
+# ---------- Raw data explorer ----------
+
+with tab_explore:
+    st.subheader("Raw Delta tables")
+    table_name = st.selectbox(
+        "Table",
+        options=[
+            "sensor_speeds", "cv_vehicle_counts", "gps_trips", "weather",
+            "speed_predictions", "rerouting_alerts", "sensor_metadata",
+            "dlq_sensors", "pipeline_latency",
+        ],
+    )
+    limit = st.slider("Rows", min_value=20, max_value=2000, value=200, step=20)
+    df = read_table(table_name, limit=limit, sort_col=None)
+    if df.empty:
+        st.warning(f"Table `{table_name}` is empty or missing.")
     else:
-        st.info("No GPS data.")
+        st.write(f"Showing **{len(df)}** rows from `{table_name}`")
+        st.dataframe(df, width="stretch")
+
 
 st.divider()
-
-st.caption(f"Last updated: {pd.Timestamp.now():%Y-%m-%d %H:%M:%S}")
-col_refresh_a, col_refresh_b = st.columns([2, 1])
-with col_refresh_a:
-    refresh_rate = st.slider("Auto-refresh interval (seconds)", 5, 60, 10)
-with col_refresh_b:
-    if st.button("Refresh now"):
-        st.rerun()
-
-time.sleep(refresh_rate)
-st.rerun()
+st.caption(
+    f"Last metrics refresh: {datetime.now(timezone.utc).isoformat(timespec='seconds')}  •  "
+    f"Auto-refresh: 5 s (metrics) / 10 s (heavy widgets via @st.fragment)"
+)

@@ -10,17 +10,17 @@ The exact same feature engineering is implemented inside the online
 
 Outputs
 -------
-- ``models/speed_predictor.onnx``     — ONNX model used by the worker
-- ``models/speed_predictor_meta.json`` — feature list + version metadata
+- ``models/speed_predictor/speed_predictor.onnx``       — ONNX model used by the worker
+- ``models/speed_predictor/speed_predictor_meta.json``  — feature list + version metadata
 - MLflow run with params, metrics, importances, and artifacts
 
 Run from repo root:
 
     python ml/train_speed_model.py
 
-Or with custom horizon and a tracking URI:
+Or with custom hyperparameters and a tracking URI:
 
-    python ml/train_speed_model.py --horizon-steps 1 \
+    python ml/train_speed_model.py --num-leaves 127 \
         --mlflow-uri http://localhost:5000
 """
 
@@ -30,11 +30,8 @@ import argparse
 import json
 import logging
 import os
-import shutil
-import sys
 import time
 from pathlib import Path
-from typing import Tuple
 
 import h5py
 import lightgbm as lgb
@@ -54,8 +51,8 @@ logger = logging.getLogger("train_speed_model")
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 H5_PATH = REPO_ROOT / "data" / "metr-la" / "METR-LA.h5"
-MODELS_DIR = REPO_ROOT / "models"
-MODELS_DIR.mkdir(parents=True, exist_ok=True)
+MODEL_DIR = REPO_ROOT / "models" / "speed_predictor"
+MODEL_DIR.mkdir(parents=True, exist_ok=True)
 
 # Feature contract — must match ml_predictor_worker/main.py exactly.
 FEATURE_NAMES = [
@@ -234,7 +231,7 @@ def main() -> None:
 
     # --- ONNX export ---
     onnx_bytes = to_onnx(model, n_features=len(FEATURE_NAMES))
-    onnx_path = MODELS_DIR / "speed_predictor.onnx"
+    onnx_path = MODEL_DIR / "speed_predictor.onnx"
     onnx_path.write_bytes(onnx_bytes)
     logger.info("Wrote %s (%s KiB)", onnx_path, len(onnx_bytes) // 1024)
 
@@ -252,7 +249,7 @@ def main() -> None:
         "n_test": len(X_test),
         "best_iteration": int(model.best_iteration_) if model.best_iteration_ else None,
     }
-    meta_path = MODELS_DIR / "speed_predictor_meta.json"
+    meta_path = MODEL_DIR / "speed_predictor_meta.json"
     meta_path.write_text(json.dumps(meta, indent=2))
     logger.info("Wrote %s", meta_path)
 

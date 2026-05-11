@@ -186,6 +186,7 @@ services:
       SCHEMA_DIR: /app/schemas
     volumes:
       - ./schemas:/app/schemas:ro
+      # Mount the fine-tuned YOLO weights folder read-only.
       - ./models/yolo_traffic_model/weights:/app/weights:ro
     deploy:
       replicas: 2
@@ -235,8 +236,8 @@ services:
       INPUT_TOPIC: ${TOPIC_SENSORS:-topic_sensors}
       OUTPUT_TOPIC: ${TOPIC_SPEED_PREDICTIONS:-topic_speed_predictions}
       CONSUMER_GROUP: ml-predictor-workers
-      ML_MODEL_PATH: /app/models/speed_predictor.onnx
-      ML_MODEL_META_PATH: /app/models/speed_predictor_meta.json
+      ML_MODEL_PATH: /app/models/speed_predictor/speed_predictor.onnx
+      ML_MODEL_META_PATH: /app/models/speed_predictor/speed_predictor_meta.json
       ML_MODEL_VERSION: ${ML_MODEL_VERSION:-lgbm_speed_v1}
       ML_WORKER_METRICS_PORT: 9101
       SCHEMA_DIR: /app/schemas
@@ -244,7 +245,9 @@ services:
       ML_WARM_START_MINUTES: ${ML_WARM_START_MINUTES:-30}
     volumes:
       - ./schemas:/app/schemas:ro
-      - ./models:/app/models:ro
+      # Mount only the speed-predictor folder, not all of models/, to avoid
+      # exposing the fine-tuned YOLO weights to this worker.
+      - ./models/speed_predictor:/app/models/speed_predictor:ro
       - ./delta_tables:/opt/delta_tables:ro
     mem_limit: 512m
     cpus: 1.0
@@ -285,8 +288,12 @@ services:
       GF_SECURITY_ADMIN_USER: admin
       GF_SECURITY_ADMIN_PASSWORD: admin
       GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: "Viewer"
     volumes:
       - grafana-data:/var/lib/grafana
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:3000/api/health || exit 1"]
       interval: 30s
@@ -294,6 +301,28 @@ services:
       retries: 5
     mem_limit: 256m
     cpus: 0.25
+
+  kafka-lag-monitor:
+    build:
+      context: ./monitoring/lag_monitor
+      dockerfile: Dockerfile
+    image: smart-traffic/kafka-lag-monitor:phase4
+    pull_policy: build
+    container_name: kafka-lag-monitor
+    depends_on:
+      kafka:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      LAG_MONITOR_GROUPS: yolo-workers,ml-predictor-workers
+      LAG_MONITOR_TOPICS: topic_cctv,topic_sensors,topic_cctv_inferred,topic_speed_predictions,topic_gps,topic_weather
+      LAG_MONITOR_POLL_SECONDS: 15
+      LAG_MONITOR_METRICS_PORT: 9102
+    mem_limit: 128m
+    cpus: 0.25
+    restart: unless-stopped
 
 volumes:
   minio-data:

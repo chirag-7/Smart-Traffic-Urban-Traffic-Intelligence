@@ -49,7 +49,12 @@ from confluent_kafka import Consumer, KafkaError, KafkaException, Producer
 from jsonschema import Draft202012Validator
 from prometheus_client import Counter, Gauge, Histogram, start_http_server
 
-import onnxruntime as ort
+# NOTE: onnxruntime is intentionally NOT imported at module level. It's a
+# C++ extension that requires platform-specific runtime libraries (e.g.
+# vcruntime140_1.dll on Windows) and importing it eagerly would prevent
+# the test suite from exercising the pure-Python window/feature logic on
+# hosts that don't have the VC++ Redistributable installed. We import it
+# lazily inside `main()` instead — production containers always have it.
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -72,8 +77,8 @@ INPUT_TOPIC = os.getenv("INPUT_TOPIC", "topic_sensors")
 OUTPUT_TOPIC = os.getenv("OUTPUT_TOPIC", "topic_speed_predictions")
 CONSUMER_GROUP = os.getenv("CONSUMER_GROUP", "ml-predictor-workers")
 
-MODEL_PATH = os.getenv("ML_MODEL_PATH", "/app/models/speed_predictor.onnx")
-META_PATH = os.getenv("ML_MODEL_META_PATH", "/app/models/speed_predictor_meta.json")
+MODEL_PATH = os.getenv("ML_MODEL_PATH", "/app/models/speed_predictor/speed_predictor.onnx")
+META_PATH = os.getenv("ML_MODEL_META_PATH", "/app/models/speed_predictor/speed_predictor_meta.json")
 SCHEMA_DIR = Path(os.getenv("SCHEMA_DIR", "/app/schemas"))
 
 METRICS_PORT = int(os.getenv("ML_WORKER_METRICS_PORT", "9101"))
@@ -150,13 +155,25 @@ WindowEntry = Tuple[float, float]  # (epoch_seconds, speed_mph)
 _windows: Dict[str, Deque[WindowEntry]] = defaultdict(lambda: deque(maxlen=MAX_WINDOW))
 
 
+_DATETIME_FORMATS = (
+    "%Y-%m-%dT%H:%M:%S",
+    "%Y-%m-%d %H:%M:%S",
+    "%Y-%m-%dT%H:%M:%S.%f",
+)
+
+
 def _parse_timestamp(value: str) -> Optional[float]:
-    """Parse the producer's timestamp into epoch seconds. Returns None on failure."""
+    """Parse the producer's timestamp into epoch seconds. Returns None on failure.
+
+    Handles three common METR-LA / producer formats:
+      - Nanoseconds since epoch as a digit string (h5py axis1 default)
+      - ISO-8601 (``2022-01-01T00:05:00``)
+      - Space-separated ``YYYY-MM-DD HH:MM:SS`` (with or without fractional seconds)
+    """
     if value is None:
         return None
     s = str(value)
     if s.isdigit():
-        # METR-LA nanoseconds (h5py default for axis1)
         try:
             return float(s) / 1e9
         except (ValueError, TypeError):
@@ -165,20 +182,12 @@ def _parse_timestamp(value: str) -> Optional[float]:
         return datetime.fromisoformat(s).timestamp()
     except ValueError:
         pass
-    try:
-        return float(pd_to_datetime_safe(s))
-    except Exception:  # noqa: BLE001
-        return None
-
-
-def pd_to_datetime_safe(s: str) -> float:
-    """Avoid importing pandas just for this; use datetime fallback."""
-    for fmt in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S.%f"):
+    for fmt in _DATETIME_FORMATS:
         try:
             return datetime.strptime(s, fmt).timestamp()
         except ValueError:
             continue
-    raise ValueError(f"Unparseable timestamp: {s!r}")
+    return None
 
 
 def compute_features(sensor_id: str, ts_epoch: float) -> Optional[np.ndarray]:
@@ -303,8 +312,12 @@ def make_producer() -> Producer:
 # Main pipeline
 # ---------------------------------------------------------------------------
 
-def process_message(raw: bytes, session: ort.InferenceSession, input_name: str,
-                    producer: Producer) -> None:
+def process_message(raw: bytes, session, input_name: str, producer: Producer) -> None:
+    """Run inference for one Kafka message.
+
+    ``session`` is an ``onnxruntime.InferenceSession`` (typed as Any here so
+    this module can be imported without onnxruntime — see top-of-file note).
+    """
     try:
         data = json.loads(raw)
     except json.JSONDecodeError:
@@ -398,9 +411,25 @@ def main() -> None:
     signal.signal(signal.SIGINT, _handle_signal)
     signal.signal(signal.SIGTERM, _handle_signal)
 
+    # Lazy-import so the module is import-clean on hosts without the C++
+    # runtime that onnxruntime needs (see the top-of-file note).
+    import onnxruntime as ort
+
     sess = ort.InferenceSession(MODEL_PATH, providers=["CPUExecutionProvider"])
     input_name = sess.get_inputs()[0].name
     logger.info("Loaded ONNX model (input=%s, version=%s)", input_name, MODEL_VERSION)
+
+    if os.path.exists(META_PATH):
+        try:
+            with open(META_PATH, "r", encoding="utf-8") as fh:
+                meta = json.load(fh)
+            logger.info(
+                "Model metadata: trained_at=%s rmse=%s mae=%s r2=%s",
+                meta.get("trained_at"), meta.get("rmse"),
+                meta.get("mae"), meta.get("r2"),
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Could not parse %s: %s", META_PATH, exc)
 
     warm_start(DELTA_SENSOR_PATH, WARM_START_MINUTES)
 

@@ -4,40 +4,40 @@ overview: Rewrite IMPLEMENTATION_PLAN.md to fix every architectural flaw flagged
 todos:
   - id: rewrite_section_1
     content: Rewrite Section 1 (Diagnosed flaws) to include the 10 new code-review flaws (broadcast bug, dashboard limit-without-order, dead Spark containers, etc.)
-    status: pending
+    status: completed
   - id: rewrite_section_2
     content: Rewrite Section 2 (YOLO) as pure Kafka-to-Kafka worker with confluent-kafka, MinIO upload, sticky camera_id partitioning, replicas=2, CPU yolov8n
-    status: pending
+    status: completed
   - id: rewrite_section_3
     content: Rewrite Section 3 (ML) as LightGBM + ONNX Kafka worker; keep MLlib as research baseline; add MLflow tracking server
-    status: pending
+    status: completed
   - id: rewrite_section_4
     content: "Rewrite Section 4 (double-counting) with ByteTrack persistence model: per-camera YOLO instances in worker, sliding-window unique count via deque"
-    status: pending
+    status: completed
   - id: rewrite_section_5
     content: Rewrite Section 5 (CCTV producer) with --fps/--loop/--source-layout/--key-by camera_id and SIGINT graceful flush
-    status: pending
+    status: completed
   - id: rewrite_section_6
     content: Rewrite Section 6 (dashboard) using deltalake-rs (no Spark), @st.fragment for CCTV grid + map, st_autorefresh for metrics, pydeck map, scatter+residuals
-    status: pending
+    status: completed
   - id: rewrite_section_7
     content: "Rewrite Section 7 (new components): DLQ, sensor_metadata, frame_url schema, Kafka lag monitor, latency tracking, MinIO, topic initializer, MLflow"
-    status: pending
+    status: completed
   - id: rewrite_section_8
     content: "Rewrite Section 8 (infra): new docker-compose.yml (no Spark containers, no nvidia, add MinIO + MLflow + Redpanda Console + Prometheus + Grafana), .dockerignore, .env.example, requirements.txt"
-    status: pending
+    status: completed
   - id: rewrite_section_9
     content: Replace Section 9 architecture diagram with the new mermaid showing Kafka workers, MinIO, and Spark as a thin Delta sink
-    status: pending
+    status: completed
   - id: rewrite_section_10
     content: Rewrite Section 10 with 4 tightened phases (event-driven core, ML out of Spark, reliability, dashboard+observability)
-    status: pending
+    status: completed
   - id: rewrite_section_11
     content: Rewrite Section 11 file-by-file change summary to match new yolo_worker/, ml_predictor_worker/, infra/, monitoring/ directories
-    status: pending
+    status: completed
   - id: rewrite_quickstart
     content: Rewrite Quick Start at the bottom for the new service order (docker compose up, init_topics, mc mb, then producers/streaming/dashboard)
-    status: pending
+    status: completed
 isProject: false
 ---
 

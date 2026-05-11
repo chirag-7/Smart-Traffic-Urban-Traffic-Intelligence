@@ -34,8 +34,7 @@ scrape_configs:
       - targets:
           - "ml-predictor-worker:9101"
 
-  # Phase 4 — uncomment when monitoring/lag_monitor is added.
-  # - job_name: kafka-lag-monitor
-  #   static_configs:
-  #     - targets:
-  #         - "kafka-lag-monitor:9102"
+  - job_name: kafka-lag-monitor
+    static_configs:
+      - targets:
+          - "kafka-lag-monitor:9102"

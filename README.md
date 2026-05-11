@@ -2,7 +2,6 @@
 
 **Keywords:** intelligent transportation systems (ITS), stream processing, Apache Kafka, Apache Spark Structured Streaming, Delta Lake, MinIO, graph analytics, congestion detection, gradient-boosted trees, YOLOv8, ByteTrack, LightGBM, ONNX Runtime, MLflow, reproducible pipelines.
 
-
 ---
 
 ## Abstract

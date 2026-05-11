@@ -1,5 +1,5 @@
 """
-Online speed-prediction Kafka worker (Phase 2).
+Online speed-prediction Kafka worker.
 
 Flow per message:
   1. Consume reading from topic_sensors (sticky-partitioned by sensor_id).

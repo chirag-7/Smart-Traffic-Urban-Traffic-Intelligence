@@ -1,8 +1,8 @@
 """
-Phase 3: dedicated streaming script for the weather branch.
+Streaming ingestion for the weather branch.
 
-Reads topic_weather, persists to delta_tables/weather. Small table, no
-partitioning needed.
+Reads ``topic_weather``, persists to ``delta_tables/weather``. Small table,
+no partitioning needed.
 """
 
 from __future__ import annotations

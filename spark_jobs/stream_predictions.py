@@ -1,8 +1,8 @@
 """
-Phase 3: dedicated streaming script for the speed-predictions branch.
+Streaming ingestion for the speed-predictions branch.
 
-Reads topic_speed_predictions (output of ml_predictor_worker), persists to
-delta_tables/speed_predictions partitioned by event_date.
+Reads ``topic_speed_predictions`` (output of the ML predictor Kafka worker),
+persists to ``delta_tables/speed_predictions`` partitioned by ``event_date``.
 """
 
 from __future__ import annotations

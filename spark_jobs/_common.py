@@ -1,7 +1,7 @@
 """
-Shared helpers for the Phase 3 split Spark streaming scripts.
+Shared helpers for the split Spark streaming scripts.
 
-Each stream_*.py builds its own SparkSession so it can be restarted
+Each ``stream_*.py`` builds its own ``SparkSession`` so it can be restarted
 independently. They all need the same package coordinates, Delta extensions,
 local-mode parallelism, and Kafka-bootstrap autodetection — centralised here.
 """

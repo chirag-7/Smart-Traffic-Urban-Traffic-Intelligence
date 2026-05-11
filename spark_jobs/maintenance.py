@@ -1,5 +1,5 @@
 """
-Phase 3: nightly maintenance for Delta Lake tables.
+Nightly maintenance for Delta Lake tables.
 
 Runs OPTIMIZE (compacts many small Parquet files into fewer big ones) and
 VACUUM (deletes files older than the retention threshold that are no longer

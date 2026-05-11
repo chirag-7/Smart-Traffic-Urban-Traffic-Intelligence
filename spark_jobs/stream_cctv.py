@@ -1,9 +1,9 @@
 """
-Phase 3: dedicated streaming script for the CCTV-inferred branch.
+Streaming ingestion for the CCTV-inferred branch.
 
-Reads topic_cctv_inferred (output of yolo_worker), validates required fields,
-persists to delta_tables/cv_vehicle_counts partitioned by event_date.
-Idempotent via Spark Structured Streaming checkpoint.
+Reads ``topic_cctv_inferred`` (output of the YOLO Kafka worker), validates
+required fields, and persists to ``delta_tables/cv_vehicle_counts`` partitioned
+by ``event_date``. Idempotent via Spark Structured Streaming checkpoint.
 """
 
 from __future__ import annotations

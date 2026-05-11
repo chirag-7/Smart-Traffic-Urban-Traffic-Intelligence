@@ -1,16 +1,10 @@
 """
-Smart Traffic — Phase 4 dashboard (Streamlit).
+Smart Traffic — Streamlit monitoring dashboard.
 
-Highlights:
-  - No PySpark / JVM. Reads Delta tables via the Rust-based `deltalake` package
-    (10-50 ms per read instead of 3-8 s spinning up a Spark session).
-  - `@st.fragment(run_every=...)` for the heavy widgets so the CCTV grid and
-    map redraw independently from the metric cards. No more whole-page flicker.
-  - `st_autorefresh` keeps top-level metrics refreshing every 5 s.
-  - `orderBy(timestamp desc).limit(N)` everywhere → the dashboard shows the
-    actual most-recent rows rather than arbitrary scan order.
-  - Annotated CCTV frames are loaded *by URL* from MinIO — Delta only stores
-    the pointer.
+Reads Delta Lake tables via the Rust-based ``deltalake`` package (no JVM).
+Heavy widgets (CCTV grid, congestion map) use ``@st.fragment`` for independent
+refresh cycles without whole-page flicker.  Annotated CCTV frames are fetched
+by URL from MinIO; Delta only stores the pointer.
 """
 
 from __future__ import annotations
@@ -151,7 +145,7 @@ tab_live, tab_map, tab_ml, tab_alerts, tab_explore = st.tabs(
 
 # ---------- Live CCTV grid ----------
 
-@st.fragment(run_every=5)
+@st.fragment(run_every=2)
 def cctv_grid():
     cv = read_table("cv_vehicle_counts", limit=200, sort_col="timestamp")
     if cv.empty:
@@ -184,7 +178,7 @@ def cctv_grid():
 
 with tab_live:
     st.subheader("Most recent annotated frame per camera")
-    st.caption("Click an image to view full size. Refreshes every 5 seconds.")
+    st.caption("Click an image to view full size. Refreshes every 2 seconds.")
     cctv_grid()
 
 

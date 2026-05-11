@@ -1,5 +1,5 @@
 """
-Phase 3: dedicated streaming script for the sensors branch.
+Streaming ingestion for the sensors branch.
 
 Responsibilities:
   - Consume topic_sensors.

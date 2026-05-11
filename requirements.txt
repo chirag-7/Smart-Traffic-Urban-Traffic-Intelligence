@@ -24,13 +24,8 @@ prometheus-client>=0.20.0
 # deltalake >= 0.20 fixes the pyarrow.field() compatibility issue that
 # silently made the Phase 4 dashboard show empty tables.
 deltalake>=0.20,<1.0
-# Phase 4 dashboard (Streamlit + pydeck map + non-blocking auto-refresh).
 streamlit-autorefresh>=1.0.0
 pydeck>=0.8.0
-# Phase 3 tests
-pytest>=7.4.0
-# Phase 2 — offline trainer + ONNX export + MLflow experiment tracking.
-# Pin lightgbm to a version supported by onnxmltools without surprises.
 lightgbm>=4.3.0,<5.0
 onnx>=1.16.0
 onnxruntime>=1.17.0

@@ -1,7 +1,7 @@
 """
-Offline speed-prediction trainer (Phase 2).
+Offline speed-prediction trainer.
 
-Reads the full METR-LA dataset, engineers temporal + lag features per sensor,
+Reads the full METR-LA dataset, engineers temporal and lag features per sensor,
 trains a LightGBM regressor, exports the model to ONNX, and logs the run to
 MLflow.
 

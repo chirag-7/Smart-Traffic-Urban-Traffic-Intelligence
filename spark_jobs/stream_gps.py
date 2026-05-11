@@ -1,7 +1,8 @@
 """
-Phase 3: dedicated streaming script for the GPS branch.
+Streaming ingestion for the GPS branch.
 
-Reads topic_gps, persists to delta_tables/gps_trips partitioned by event_date.
+Reads ``topic_gps``, persists to ``delta_tables/gps_trips`` partitioned by
+``event_date``.
 """
 
 from __future__ import annotations

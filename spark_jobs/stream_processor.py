@@ -1,12 +1,21 @@
 """
-Spark Structured Streaming pipeline for smart-traffic.
+Spark Structured Streaming pipeline for smart-traffic (Phase 1).
 
-Subscribes to Kafka topics, derives features, and writes append-only Delta Lake tables.
+Subscribes to Kafka topics, validates schemas, writes append-only Delta tables.
+
 Branches:
-  - CCTV: decodes frames and uses Native Spark Bypass for vehicle counts.
-  - Sensors: persists speeds; on congestion (speed < threshold) joins graph shortest paths.
-  - GPS: trip-level demand stream.
-  - Weather: OpenWeather-style JSON payloads.
+  - CCTV (NEW)  : reads ``topic_cctv_inferred`` (already-inferenced JSON from
+                  the yolo-worker). No HTTP calls, no UDFs, no rand(). Pure
+                  Kafka-to-Delta sink, partitioned by event_date.
+  - Sensors     : persists speeds; on congestion (speed < threshold) joins
+                  precomputed ``graph_shortest_paths`` (broadcast once at
+                  startup — not re-read per batch).
+  - GPS         : trip-level demand stream, partitioned by event_date.
+  - Weather     : OpenWeather-style JSON payloads.
+
+Phase 3 will split this into four independent scripts and add DLQ + idempotent
+writes. Phase 1 keeps the broadcast-shortest-paths fix and the partitioning
+fix in place, plus removes the `rand()` placeholder entirely.
 """
 
 from __future__ import annotations
@@ -18,8 +27,10 @@ import sys
 
 from dotenv import load_dotenv
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import col, from_json, lit, rand, round
+from pyspark.sql.functions import col, from_json, lit, to_date
 from pyspark.sql.types import (
+    ArrayType,
+    DoubleType,
     FloatType,
     IntegerType,
     StringType,
@@ -35,8 +46,14 @@ logger = logging.getLogger(__name__)
 os.environ["PYSPARK_PYTHON"] = sys.executable
 os.environ["PYSPARK_DRIVER_PYTHON"] = sys.executable
 
-CONGESTION_THRESHOLD_MPH = 20.0
+CONGESTION_THRESHOLD_MPH = float(os.getenv("CONGESTION_THRESHOLD_MPH", "20.0"))
+TOPIC_SENSORS = os.getenv("TOPIC_SENSORS", "topic_sensors")
+TOPIC_GPS = os.getenv("TOPIC_GPS", "topic_gps")
+TOPIC_CCTV_INFERRED = os.getenv("TOPIC_CCTV_INFERRED", "topic_cctv_inferred")
+TOPIC_WEATHER = os.getenv("TOPIC_WEATHER", "topic_weather")
 
+# Autodetect Kafka bootstrap depending on whether we resolve the internal
+# Docker DNS name (when running on host, we won't — fall back to localhost).
 try:
     socket.getaddrinfo("kafka", 29092, socket.AF_UNSPEC, socket.SOCK_STREAM)
     KAFKA_SPARK = "kafka:29092"
@@ -62,44 +79,68 @@ spark = (
 spark.sparkContext.setLogLevel("WARN")
 
 # ============================================================================
-# --- Branch A: CCTV + YOLO vehicle counts (NATIVE BYPASS) ---
+# Broadcast graph_shortest_paths ONCE at startup.
+#
+# Previously this Delta table was read from disk inside foreachBatch on every
+# micro-batch (5s) — a major performance bug. We now materialise a Python
+# dict[str, dict[str, int]] once and broadcast it to executors.
 # ============================================================================
-cctv_schema = StructType(
+GRAPH_SP_PATH = "delta_tables/graph_shortest_paths"
+SHORTEST_PATHS_BC = None
+try:
+    sp_rows = spark.read.format("delta").load(GRAPH_SP_PATH).collect()
+    sp_dict = {r["id"]: dict(r["distances"] or {}) for r in sp_rows}
+    SHORTEST_PATHS_BC = spark.sparkContext.broadcast(sp_dict)
+    logger.info("Broadcasted graph_shortest_paths: %s vertices.", len(sp_dict))
+except Exception as exc:  # noqa: BLE001
+    logger.warning(
+        "graph_shortest_paths not available (%s). Run "
+        "`python spark_jobs/graph_analytics.py` first. Rerouting will be skipped.",
+        exc,
+    )
+
+# ============================================================================
+# --- Branch A: CCTV inferred (NEW — Kafka-to-Delta sink, no HTTP, no UDF) ---
+# ============================================================================
+cctv_inferred_schema = StructType(
     [
         StructField("camera_id", StringType()),
         StructField("frame_id", StringType()),
-        StructField("timestamp", FloatType()),
-        StructField("frame_b64", StringType()),
+        StructField("timestamp", DoubleType()),
+        StructField("unique_count_5min", IntegerType()),
+        StructField("unique_count_session", IntegerType()),
+        StructField("track_ids", ArrayType(IntegerType())),
+        StructField("frame_url", StringType()),
+        StructField("inference_ms", FloatType()),
+        StructField("model_version", StringType()),
+        StructField("worker_id", StringType()),
+        StructField("processed_at", DoubleType()),
     ]
 )
-
-logger.info("YOLOv8 Native Spark JVM Bypass Mode active (No Python Workers required)")
 
 cctv_stream = (
     spark.readStream.format("kafka")
     .option("kafka.bootstrap.servers", KAFKA_SPARK)
-    .option("subscribe", "topic_cctv")
+    .option("subscribe", TOPIC_CCTV_INFERRED)
     .option("startingOffsets", "latest")
-    .option("maxOffsetsPerTrigger", 50)
+    .option("maxOffsetsPerTrigger", 500)
     .load()
-    .select(from_json(col("value").cast("string"), cctv_schema).alias("d"))
+    .select(from_json(col("value").cast("string"), cctv_inferred_schema).alias("d"))
     .select("d.*")
+    .withColumn("event_date", to_date(col("timestamp").cast("timestamp")))
 )
-
-# NATIVE FIX: Use Spark's internal rand() to generate 5 to 25 cars, completely avoiding PyArrow socket timeouts.
-cctv_stream = cctv_stream.withColumn("vehicle_count", round(rand() * 20 + 5).cast("integer"))
-cctv_stream = cctv_stream.drop("frame_b64")
 
 cctv_query = (
     cctv_stream.writeStream.format("delta")
-    .option("checkpointLocation", "delta_tables/checkpoints/cctv")
+    .option("checkpointLocation", "delta_tables/checkpoints/cctv_inferred")
+    .partitionBy("event_date")
     .outputMode("append")
     .trigger(processingTime="5 seconds")
     .start("delta_tables/cv_vehicle_counts")
 )
 
 # ============================================================================
-# --- Branch B: sensors + congestion rerouting ---
+# --- Branch B: sensors + congestion rerouting (broadcast lookup) ---
 # ============================================================================
 sensor_schema = StructType(
     [
@@ -107,57 +148,92 @@ sensor_schema = StructType(
         StructField("sensor_id", StringType()),
         StructField("sensor_index", IntegerType(), True),
         StructField("speed", FloatType()),
+        StructField("ingested_at", DoubleType(), True),
     ]
 )
 
+
 def detect_congestion_and_reroute(batch_df, batch_id):
-    if batch_df.count() == 0:
+    if batch_df.rdd.isEmpty():
         return
 
-    batch_df.write.format("delta").mode("append").option("mergeSchema", "true").save(
-        "delta_tables/sensor_speeds"
+    # Annotate event_date and persist all sensor readings.
+    sensor_out = batch_df.withColumn(
+        "event_date", to_date(col("timestamp").cast("timestamp"))
     )
+    (
+        sensor_out.write.format("delta")
+        .mode("append")
+        .option("mergeSchema", "true")
+        .option("txnAppId", "stream-processor-sensors")
+        .option("txnVersion", str(batch_id))
+        .partitionBy("event_date")
+        .save("delta_tables/sensor_speeds")
+    )
+
+    if SHORTEST_PATHS_BC is None:
+        return
 
     congested = batch_df.filter(col("speed") < lit(CONGESTION_THRESHOLD_MPH))
-    if congested.count() == 0:
+    if congested.rdd.isEmpty():
         return
 
-    congested_rows = congested.collect()
-    labels = [
-        f"{r['sensor_id']}[{r['sensor_index']}]"
-        if r["sensor_index"] is not None
-        else str(r["sensor_id"])
-        for r in congested_rows
-    ]
-    logger.warning("Batch %s: congestion below %.1f mph — %s", batch_id, CONGESTION_THRESHOLD_MPH, labels)
+    rows = congested.collect()
+    sp_dict = SHORTEST_PATHS_BC.value
+    alerts = []
+    for r in rows:
+        if r["sensor_index"] is None:
+            continue
+        vid = str(int(r["sensor_index"]))
+        distances = sp_dict.get(vid)
+        if not distances:
+            continue
+        alerts.append(
+            {
+                "id": vid,
+                "sensor_id": r["sensor_id"],
+                "speed": float(r["speed"]),
+                "distances": distances,
+                "batch_id": int(batch_id),
+            }
+        )
 
-    vertex_ids = sorted(
-        {str(int(r["sensor_index"])) for r in congested_rows if r["sensor_index"] is not None}
-    )
-    if not vertex_ids:
+    if not alerts:
         logger.warning(
-            "Batch %s: rerouting skipped (sensor_index missing; update sensor producer).",
+            "Batch %s: congestion detected but no broadcast matches "
+            "(sensor_index missing or vertex not in graph).",
             batch_id,
         )
         return
 
-    try:
-        sp_df = spark.read.format("delta").load("delta_tables/graph_shortest_paths")
-        reroutes = sp_df.filter(col("id").isin(vertex_ids))
-        n = reroutes.count()
-        if n > 0:
-            reroutes.withColumn("batch_id", lit(batch_id)).write.format("delta").mode("append").save(
-                "delta_tables/rerouting_alerts"
-            )
-            logger.info("Batch %s: wrote %s rerouting alert row(s).", batch_id, n)
-    except Exception as exc:
-        logger.warning("Batch %s: shortest-path Delta read failed: %s", batch_id, exc)
+    from pyspark.sql.types import MapType
+
+    alerts_schema = StructType(
+        [
+            StructField("id", StringType()),
+            StructField("sensor_id", StringType()),
+            StructField("speed", FloatType()),
+            StructField("distances", MapType(StringType(), IntegerType())),
+            StructField("batch_id", IntegerType()),
+        ]
+    )
+    alerts_df = spark.createDataFrame(alerts, alerts_schema)
+    (
+        alerts_df.write.format("delta")
+        .mode("append")
+        .option("txnAppId", "stream-processor-alerts")
+        .option("txnVersion", str(batch_id))
+        .save("delta_tables/rerouting_alerts")
+    )
+    logger.info("Batch %s: wrote %s rerouting alert(s).", batch_id, len(alerts))
+
 
 sensor_stream = (
     spark.readStream.format("kafka")
     .option("kafka.bootstrap.servers", KAFKA_SPARK)
-    .option("subscribe", "topic_sensors")
+    .option("subscribe", TOPIC_SENSORS)
     .option("startingOffsets", "latest")
+    .option("maxOffsetsPerTrigger", 5000)
     .load()
     .select(from_json(col("value").cast("string"), sensor_schema).alias("d"))
     .select("d.*")
@@ -180,29 +256,33 @@ gps_schema = StructType(
         StructField("pickup_zone", IntegerType()),
         StructField("dropoff_zone", IntegerType()),
         StructField("distance_miles", FloatType()),
+        StructField("ingested_at", DoubleType(), True),
     ]
 )
 
 gps_stream = (
     spark.readStream.format("kafka")
     .option("kafka.bootstrap.servers", KAFKA_SPARK)
-    .option("subscribe", "topic_gps")
+    .option("subscribe", TOPIC_GPS)
     .option("startingOffsets", "latest")
+    .option("maxOffsetsPerTrigger", 5000)
     .load()
     .select(from_json(col("value").cast("string"), gps_schema).alias("d"))
     .select("d.*")
+    .withColumn("event_date", to_date(col("pickup_time").cast("timestamp")))
 )
 
 gps_query = (
     gps_stream.writeStream.format("delta")
     .option("checkpointLocation", "delta_tables/checkpoints/gps")
+    .partitionBy("event_date")
     .outputMode("append")
     .trigger(processingTime="5 seconds")
     .start("delta_tables/gps_trips")
 )
 
 # ============================================================================
-# --- Branch D: weather ---
+# --- Branch D: weather (unchanged from the original; small table, no partitioning needed) ---
 # ============================================================================
 weather_schema = StructType(
     [
@@ -221,14 +301,15 @@ weather_schema = StructType(
         StructField("weather_main", StringType()),
         StructField("weather_description", StringType()),
         StructField("weather_id", IntegerType()),
-        StructField("timestamp", FloatType()),
+        StructField("timestamp", DoubleType()),
+        StructField("ingested_at", DoubleType(), True),
     ]
 )
 
 weather_stream = (
     spark.readStream.format("kafka")
     .option("kafka.bootstrap.servers", KAFKA_SPARK)
-    .option("subscribe", "topic_weather")
+    .option("subscribe", TOPIC_WEATHER)
     .option("startingOffsets", "latest")
     .load()
     .select(from_json(col("value").cast("string"), weather_schema).alias("d"))
@@ -244,8 +325,8 @@ weather_query = (
 )
 
 logger.info(
-    "Streaming active — CCTV→delta_tables/cv_vehicle_counts | "
-    "sensors→sensor_speeds+rerouting_alerts | GPS→gps_trips | weather→weather"
+    "Streaming active — CCTV→cv_vehicle_counts (from %s) | sensors→sensor_speeds + rerouting_alerts | GPS→gps_trips | weather→weather",
+    TOPIC_CCTV_INFERRED,
 )
 logger.info("Stop with Ctrl+C.")
 

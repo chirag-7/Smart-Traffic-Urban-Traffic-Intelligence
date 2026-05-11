@@ -16,10 +16,41 @@ py -3.10 -m venv venv
 pip install -r requirements.txt
 copy .env.example .env
 # Edit .env — add OPENWEATHER_API_KEY if using weather producer; never commit .env
-docker compose up -d
+
+# One-time migration if upgrading from the pre-Phase-1 pipeline
+# (old cv_vehicle_counts table has an incompatible schema):
+Move-Item delta_tables\cv_vehicle_counts delta_tables\_legacy_cv_vehicle_counts -ErrorAction SilentlyContinue
+Remove-Item -Recurse -Force delta_tables\checkpoints\cctv -ErrorAction SilentlyContinue
+
+docker compose up -d                                    # full stack
+# docker compose -f docker-compose.yml -f docker-compose.minimal.yml up -d   # dev
 ```
 
-Then follow **§8 Experimental protocol** (graph + ML batch jobs, streaming, producers, dashboard).
+Then follow **§8 Experimental protocol** (graph + ML batch jobs, streaming, producers, dashboard). See **`IMPLEMENTATION_PLAN.md`** for the full event-driven design rationale.
+
+### Host vs Docker responsibility matrix
+
+The Kafka bootstrap address differs by where a process runs (Docker exposes two listeners on purpose).
+
+| Component | Runs on | Kafka bootstrap | MinIO endpoint |
+|---|---|---|---|
+| `producers/*.py` | Host Python | `localhost:9092` | — |
+| `spark_jobs/stream_processor.py` | Host Python (`local[4]`) | `localhost:9092` (autodetected) | — |
+| `dashboard/app.py` | Host Python (Streamlit) | — | `http://localhost:9000` |
+| `yolo_worker` (×2 replicas) | Docker container | `kafka:29092` | `http://minio:9000` |
+| `ml_predictor_worker` (Phase 2) | Docker container | `kafka:29092` | — |
+| `prometheus`, `grafana`, `kafka-ui` | Docker container | (only kafka-ui hits `kafka:29092`) | — |
+
+### Service UIs (when full stack is up)
+
+| URL | Purpose |
+|---|---|
+| `http://localhost:8080` | Kafka UI (Redpanda Console) — inspect topics and messages |
+| `http://localhost:9001` | MinIO console — browse annotated CCTV frames (`minioadmin` / `minioadmin`) |
+| `http://localhost:9090` | Prometheus — raw metrics |
+| `http://localhost:3000` | Grafana — pre-built dashboards (`admin` / `admin`) |
+| `http://localhost:5000` | MLflow tracking (Phase 2) |
+| `http://localhost:8501` | Streamlit dashboard |
 
 ---
 

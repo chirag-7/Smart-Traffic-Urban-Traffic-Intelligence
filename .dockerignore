@@ -1,0 +1,38 @@
+# Keep heavy / sensitive paths out of every build context.
+
+# Dataset and lake artefacts (large, never needed in an image).
+data/
+delta_tables/
+
+# Trained models — mounted at runtime via volumes, not baked into images.
+models/
+
+# Local Python env / IDE / VCS.
+venv/
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.coverage
+.git/
+.gitignore
+.gitattributes
+.github/
+.vscode/
+.idea/
+
+# Compose overrides and local secrets.
+.env
+.env.local
+docker-compose.override.yml
+
+# Logs, OS junk.
+*.log
+.DS_Store
+Thumbs.db
+
+# Markdown / docs.
+IMPLEMENTATION_PLAN.md
+README.md
+LICENSE

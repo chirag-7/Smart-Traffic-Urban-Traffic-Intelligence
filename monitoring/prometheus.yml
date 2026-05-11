@@ -1,0 +1,44 @@
+# Prometheus scrape configuration for smart-traffic (Phase 1 + Phase 2 ready).
+#
+# yolo-worker(s) run as docker-compose replicas; dns_sd_configs lets a single
+# scrape target discover all replicas at once. ml-predictor-worker and the
+# kafka-lag-monitor become reachable once Phase 2/4 lands.
+
+global:
+  scrape_interval: 15s
+  scrape_timeout: 10s
+  external_labels:
+    monitor: smart-traffic
+
+scrape_configs:
+
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
+
+  - job_name: yolo-worker
+    dns_sd_configs:
+      - names:
+          - "tasks.yolo-worker"   # swarm DNS — falls back to A-record discovery on compose
+        type: A
+        port: 9100
+    static_configs:
+      - targets:
+          - "yolo-worker:9100"     # plain compose
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+
+  - job_name: ml-predictor-worker
+    static_configs:
+      - targets:
+          - "ml-predictor-worker:9101"
+    metric_relabel_configs:
+      - source_labels: [__name__]
+        regex: ".*"
+        action: keep
+
+  - job_name: kafka-lag-monitor
+    static_configs:
+      - targets:
+          - "kafka-lag-monitor:9102"

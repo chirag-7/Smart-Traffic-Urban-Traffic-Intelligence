@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "smart-traffic/gps.json",
+  "title": "topic_gps message",
+  "description": "NYC TLC yellow-taxi trip record from gps_producer.py.",
+  "type": "object",
+  "required": ["pickup_time", "dropoff_time", "pickup_zone", "dropoff_zone", "distance_miles"],
+  "additionalProperties": false,
+  "properties": {
+    "pickup_time":    { "type": "string", "minLength": 1 },
+    "dropoff_time":   { "type": "string", "minLength": 1 },
+    "pickup_zone":    { "type": "integer", "minimum": 0 },
+    "dropoff_zone":   { "type": "integer", "minimum": 0 },
+    "distance_miles": { "type": "number",  "minimum": 0, "maximum": 500 },
+    "ingested_at":    { "type": "number",  "minimum": 0 }
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "smart-traffic/speed_predictions.json",
+  "title": "topic_speed_predictions message",
+  "description": "Online speed prediction emitted by ml_predictor_worker (Phase 2). Spark stream_predictions.py persists this to delta_tables/speed_predictions.",
+  "type": "object",
+  "required": ["sensor_id", "timestamp", "predicted_speed", "model_version"],
+  "additionalProperties": false,
+  "properties": {
+    "sensor_id":       { "type": "string", "minLength": 1, "maxLength": 64 },
+    "timestamp":       { "type": "string", "minLength": 1 },
+    "actual_speed":    { "type": ["number", "null"] },
+    "predicted_speed": { "type": "number" },
+    "horizon_minutes": { "type": ["integer", "null"], "minimum": 0 },
+    "model_version":   { "type": "string", "minLength": 1, "maxLength": 64 },
+    "inference_us":    { "type": ["number", "null"], "minimum": 0 },
+    "processed_at":    { "type": "number", "minimum": 0 }
+  }
+}

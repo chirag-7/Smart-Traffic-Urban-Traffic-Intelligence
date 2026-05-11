@@ -1,0 +1,22 @@
+# Minimal override for fast dev iteration on a constrained laptop.
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.minimal.yml up -d
+#
+# Drops: kafka-ui, prometheus, grafana. Keeps: zookeeper, kafka, kafka-init,
+# minio, minio-init, and a single yolo-worker replica.
+
+services:
+
+  kafka-ui:
+    profiles: ["disabled"]
+
+  prometheus:
+    profiles: ["disabled"]
+
+  grafana:
+    profiles: ["disabled"]
+
+  yolo-worker:
+    deploy:
+      replicas: 1

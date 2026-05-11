@@ -1,6 +1,18 @@
-version: '3.8'
+# Smart Traffic — local Windows + Docker Desktop, CPU-only, no AWS.
+#
+# Host processes (producers, Spark, Streamlit) talk to Kafka on localhost:9092.
+# Containerised workers reach Kafka on the internal listener kafka:29092 and
+# reach MinIO at http://minio:9000. See README "Host vs Docker matrix".
+#
+# Resource limits are intentionally tight so a runaway service fails fast
+# instead of swap-thrashing a 16 GB laptop. For very lean dev iteration,
+# override with docker-compose.minimal.yml.
 
 services:
+
+  # ==========================================================================
+  # Message bus
+  # ==========================================================================
 
   zookeeper:
     image: confluentinc/cp-zookeeper:7.5.0
@@ -15,6 +27,8 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    mem_limit: 512m
+    cpus: 0.5
 
   kafka:
     image: confluentinc/cp-kafka:7.5.0
@@ -23,52 +37,207 @@ services:
       zookeeper:
         condition: service_healthy
     ports:
-      - "9092:9092"     # Host access (your Python producers)
-      - "29092:29092"   # Internal Docker access (Spark containers)
+      - "9092:9092"
+      - "29092:29092"
     environment:
       KAFKA_BROKER_ID: 1
       KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
-      # Two listeners: PLAINTEXT for host, PLAINTEXT_INTERNAL for containers
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_INTERNAL:PLAINTEXT
       KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092,PLAINTEXT_INTERNAL://kafka:29092
       KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,PLAINTEXT_INTERNAL://0.0.0.0:29092
       KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT_INTERNAL
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
-      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+      KAFKA_NUM_PARTITIONS: 3
+      KAFKA_DEFAULT_REPLICATION_FACTOR: 1
+      KAFKA_MESSAGE_MAX_BYTES: 10485760
+      KAFKA_REPLICA_FETCH_MAX_BYTES: 10485760
     healthcheck:
       test: ["CMD", "kafka-topics", "--bootstrap-server", "localhost:9092", "--list"]
       interval: 15s
       timeout: 10s
       retries: 10
+    mem_limit: 1500m
+    cpus: 1.5
 
-  spark-master:
-    image: bitnamilegacy/spark:3.5.0
-    container_name: spark-master
-    environment:
-      - SPARK_MODE=master
-      - SPARK_RPC_AUTHENTICATION_ENABLED=no
-      - SPARK_RPC_ENCRYPTION_ENABLED=no
-    ports:
-      - "8090:8080"
-      - "7077:7077"
-    volumes:
-      - ./spark_jobs:/opt/spark_jobs
-      - ./delta_tables:/opt/delta_tables
-      - ./models:/opt/models
-      - ./data:/opt/data
-
-  spark-worker:
-    image: bitnamilegacy/spark:3.5.0
-    container_name: spark-worker
+  # One-shot: declare topics with explicit partition count + retention so the
+  # broker does NOT auto-create them with 1 partition the first time a
+  # producer publishes.
+  kafka-init:
+    image: python:3.10-slim
+    container_name: kafka-init
     depends_on:
-      - spark-master
+      kafka:
+        condition: service_healthy
     environment:
-      - SPARK_MODE=worker
-      - SPARK_MASTER_URL=spark://spark-master:7077
-      - SPARK_WORKER_MEMORY=4G
-      - SPARK_WORKER_CORES=2
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      KAFKA_NUM_PARTITIONS: 3
+      KAFKA_REPLICATION_FACTOR: 1
+      KAFKA_RETENTION_MS: 86400000
+      TOPIC_SENSORS: topic_sensors
+      TOPIC_GPS: topic_gps
+      TOPIC_CCTV: topic_cctv
+      TOPIC_CCTV_INFERRED: topic_cctv_inferred
+      TOPIC_WEATHER: topic_weather
+      TOPIC_SPEED_PREDICTIONS: topic_speed_predictions
     volumes:
-      - ./spark_jobs:/opt/spark_jobs
-      - ./delta_tables:/opt/delta_tables
-      - ./models:/opt/models
-      - ./data:/opt/data
+      - ./infra:/infra:ro
+    command: ["sh", "-c", "pip install --quiet confluent-kafka>=2.4.0 && python /infra/init_topics.py"]
+    restart: "no"
+
+  kafka-ui:
+    image: redpandadata/console:latest
+    container_name: kafka-ui
+    depends_on:
+      kafka:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+    environment:
+      KAFKA_BROKERS: kafka:29092
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/admin/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    mem_limit: 256m
+    cpus: 0.25
+
+  # ==========================================================================
+  # Object storage (annotated CCTV JPEGs)
+  # ==========================================================================
+
+  minio:
+    image: minio/minio:latest
+    container_name: minio
+    command: server /data --console-address ":9001"
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-minioadmin}
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:9000/minio/health/live"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    mem_limit: 512m
+    cpus: 0.5
+
+  # One-shot: create the cctv-frames bucket and make it publicly readable so
+  # Streamlit (running on the host) can `st.image(frame_url)` without auth.
+  minio-init:
+    image: minio/mc:latest
+    container_name: minio-init
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin}
+      MINIO_BUCKET: ${MINIO_BUCKET:-cctv-frames}
+    entrypoint: >
+      sh -c "
+      until mc alias set local http://minio:9000 $${MINIO_ACCESS_KEY} $${MINIO_SECRET_KEY} >/dev/null 2>&1; do
+        echo 'Waiting for MinIO…'; sleep 2;
+      done &&
+      mc mb --ignore-existing local/$${MINIO_BUCKET} &&
+      mc anonymous set download local/$${MINIO_BUCKET} &&
+      echo 'MinIO bucket $${MINIO_BUCKET} ready.'
+      "
+    restart: "no"
+
+  # ==========================================================================
+  # YOLO Kafka workers (Phase 1, the centrepiece)
+  # ==========================================================================
+
+  yolo-worker:
+    build:
+      context: ./yolo_worker
+      dockerfile: Dockerfile
+    image: smart-traffic/yolo-worker:phase1
+    depends_on:
+      kafka:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+      minio-init:
+        condition: service_completed_successfully
+    environment:
+      KAFKA_BROKERS: kafka:29092
+      INPUT_TOPIC: ${TOPIC_CCTV:-topic_cctv}
+      OUTPUT_TOPIC: ${TOPIC_CCTV_INFERRED:-topic_cctv_inferred}
+      CONSUMER_GROUP: yolo-workers
+      MINIO_ENDPOINT: minio:9000
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin}
+      MINIO_BUCKET: ${MINIO_BUCKET:-cctv-frames}
+      MINIO_PUBLIC_BASE_URL: ${MINIO_PUBLIC_BASE_URL:-http://localhost:9000/cctv-frames}
+      YOLO_MODEL_PATH: /app/weights/best.pt
+      YOLO_IMGSZ: ${YOLO_IMGSZ:-480}
+      YOLO_CONF: ${YOLO_CONF:-0.3}
+      YOLO_FRAME_MAX_AGE_SEC: ${YOLO_FRAME_MAX_AGE_SEC:-10}
+      YOLO_WORKER_METRICS_PORT: 9100
+      YOLO_MODEL_VERSION: ${YOLO_MODEL_VERSION:-yolo_traffic_model_v1}
+      SCHEMA_DIR: /app/schemas
+    volumes:
+      - ./schemas:/app/schemas:ro
+      - ./models/yolo_traffic_model/weights:/app/weights:ro
+    deploy:
+      replicas: 2
+    mem_limit: 1500m
+    cpus: 1.0
+    restart: unless-stopped
+
+  # ==========================================================================
+  # Observability (basic — full Grafana dashboards land in Phase 4)
+  # ==========================================================================
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=3d"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:9090/-/healthy"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+    mem_limit: 512m
+    cpus: 0.5
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    depends_on:
+      - prometheus
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - grafana-data:/var/lib/grafana
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/api/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+    mem_limit: 256m
+    cpus: 0.25
+
+volumes:
+  minio-data:
+  prometheus-data:
+  grafana-data:

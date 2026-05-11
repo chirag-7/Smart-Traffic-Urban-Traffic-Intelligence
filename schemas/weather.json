@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "smart-traffic/weather.json",
+  "title": "topic_weather message",
+  "description": "Normalised OpenWeatherMap current-weather payload from weather_producer.py.",
+  "type": "object",
+  "required": ["city", "observed_at", "timestamp"],
+  "additionalProperties": false,
+  "properties": {
+    "city":                 { "type": "string", "minLength": 1 },
+    "country":              { "type": ["string", "null"] },
+    "observed_at":          { "type": "string", "minLength": 1 },
+    "temp_c":               { "type": ["number", "null"] },
+    "feels_like_c":         { "type": ["number", "null"] },
+    "temp_min_c":           { "type": ["number", "null"] },
+    "temp_max_c":           { "type": ["number", "null"] },
+    "humidity":             { "type": ["integer", "null"], "minimum": 0, "maximum": 100 },
+    "pressure_hpa":         { "type": ["integer", "null"], "minimum": 0 },
+    "wind_speed_mps":       { "type": ["number", "null"], "minimum": 0 },
+    "wind_deg":             { "type": ["integer", "null"], "minimum": 0, "maximum": 360 },
+    "clouds_pct":           { "type": ["integer", "null"], "minimum": 0, "maximum": 100 },
+    "weather_main":         { "type": ["string", "null"] },
+    "weather_description":  { "type": ["string", "null"] },
+    "weather_id":           { "type": ["integer", "null"] },
+    "timestamp":            { "type": "number", "minimum": 0 },
+    "ingested_at":          { "type": "number", "minimum": 0 }
+  }
+}

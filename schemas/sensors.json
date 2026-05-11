@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "smart-traffic/sensors.json",
+  "title": "topic_sensors message",
+  "description": "METR-LA loop-detector reading from sensor_producer.py. sensor_index aligns with the adjacency matrix column order so streaming can join shortest paths by string id.",
+  "type": "object",
+  "required": ["timestamp", "sensor_id", "speed"],
+  "additionalProperties": false,
+  "properties": {
+    "timestamp": {
+      "type": "string",
+      "description": "ISO-8601 or numeric-nanoseconds string. Spark casts to timestamp."
+    },
+    "sensor_id":    { "type": "string", "minLength": 1, "maxLength": 64 },
+    "sensor_index": { "type": ["integer", "null"], "minimum": 0 },
+    "speed":        { "type": "number", "minimum": 0, "maximum": 150 },
+    "ingested_at":  { "type": "number", "minimum": 0 }
+  }
+}

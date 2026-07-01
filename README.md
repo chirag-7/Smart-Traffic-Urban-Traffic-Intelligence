@@ -331,24 +331,10 @@ Use **only data you are licensed to hold**. Do not commit API keys, raw video, o
 7. Jocher, G. et al. *Ultralytics YOLOv8* — https://github.com/ultralytics/ultralytics
 8. Ke, G. et al. *LightGBM: A Highly Efficient Gradient Boosting Decision Tree.* NeurIPS 2017.
 9. Zhang, Y. et al. *ByteTrack: Multi-Object Tracking by Associating Every Detection Box.* ECCV 2022.
-
----
-
-## 14. Citation
-
-```bibtex
-@software{smart_traffic_2026,
-  title  = {Smart Traffic: Multimodal Streaming Analytics for Urban Traffic Intelligence},
-  author = {Abbas, Zubair},
-  year   = {2026},
-  url    = {https://github.com/zubiiabbasi/smart-traffic},
-  note   = {Kafka, Spark Structured Streaming, Delta Lake, MinIO, YOLOv8 + ByteTrack,
-            LightGBM + ONNX Runtime, MLflow, NetworkX, Streamlit, Prometheus + Grafana}
-}
-```
+10. Abbas, Zubair. *Smart Traffic: Multimodal Streaming Analytics for Urban Traffic Intelligence*
 
 ---
 
 ## License
 
-**Source code** is released under the **[MIT License](LICENSE)** (Copyright 2026 Zubair Abbas). **Datasets and external services** remain under their respective terms; this project does not redistribute them.
+**Source code** is released under the **[MIT License](LICENSE)**. **Datasets and external services** remain under their respective terms; this project does not redistribute them.
